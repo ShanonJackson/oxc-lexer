@@ -7,6 +7,7 @@ homepage.workspace = true
 keywords.workspace = true
 license.workspace = true
 publish = false
+default-run = "oxc_coverage"
 repository.workspace = true
 description.workspace = true
 
