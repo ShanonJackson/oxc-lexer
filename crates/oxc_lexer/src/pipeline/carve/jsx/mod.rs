@@ -187,7 +187,7 @@ pub(super) unsafe fn carve_jsx(
                         }
                     }
                     b'/' => {
-                        i = lex_slash(t, src, srcs, n, st, kind, opch, word, digit, ts, s, lanes);
+                        i = lex_slash(t, src, srcs, n, st, kind, opch, word, ts, s, lanes);
                     }
                     b'<' => {
                         let c1 = if s + 1 < n { *src.add(s + 1) } else { 0 };
@@ -202,9 +202,9 @@ pub(super) unsafe fn carve_jsx(
                             t,
                             src,
                             st,
+                            opch,
                             kind,
                             word,
-                            digit,
                             n,
                             s,
                             ts,

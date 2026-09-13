@@ -91,7 +91,6 @@ pub(super) unsafe fn lex_slash(
     kind: *mut u8,
     opch: *mut u64,
     word: *const u64,
-    digit: *const u64,
     ts: bool,
     s: usize,
     lanes: &mut Lanes,
@@ -101,7 +100,7 @@ pub(super) unsafe fn lex_slash(
         lex_line_comment(src, srcs, n, st, kind, s, lanes)
     } else if d == b'*' {
         lex_block_comment(src, srcs, n, st, kind, s, lanes)
-    } else if not_operator_position(t, src, st, kind, word, digit, n, s, ts, lanes.module) {
+    } else if not_operator_position(t, src, st, opch, kind, word, n, s, ts, lanes.module) {
         lex_regex(src, srcs, n, st, kind, word, s, lanes)
     } else if s + 1 < n && *src.add(s + 1) == b'=' {
         // `/=`: absorb the `=`.

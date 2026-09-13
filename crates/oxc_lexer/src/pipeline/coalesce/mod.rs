@@ -8,7 +8,7 @@ use crate::{
 use super::{
     NUM,
     bitmap::{bm_clear, bm_clear_range, bm_get, bm_next0, bm_set},
-    disambiguate::{gt_run_split, lt_run_split},
+    disambiguate::{gt_run_split, lt_run_split, walk_new_pass},
     scan::scan_number,
 };
 
@@ -32,6 +32,7 @@ pub unsafe fn coalesce(
     lanes: &mut Lanes,
 ) {
     let kw = if ts { &t.kwts } else { &t.kwjs };
+    walk_new_pass();
     let nw = (n + 63) >> 6;
     let mut opprev: u64 = 0;
     let mut dtprev: u64 = 0;
@@ -133,7 +134,18 @@ pub unsafe fn coalesce(
                     && kw.ts_key
                     && (b1 == b'>' || (b1 == b'=' && p > 0 && !is_ws(*src.add(p - 1))))
                 {
-                    let g = gt_run_split(t, src, st, opch, kind, n, p, run);
+                    let g = gt_run_split(
+                        t,
+                        src,
+                        st,
+                        opch,
+                        kind,
+                        n,
+                        p,
+                        run,
+                        lanes.module,
+                        (w & !(KWB - 1)) << 6,
+                    );
                     if g != 0 {
                         // Only `>`s stay split; the rest still munches, or `>>&&` would emit two `&`s.
                         cursor = munch_walk(t, src, n, st, opch, kind, p + g);
@@ -276,7 +288,19 @@ unsafe fn glue_number(
             // reaches the `>` run before `coalesce` ever raises it as an event.
             if c == b'>' && kw.ts_key && matches!(*src.add(e2 + 1), b'>' | b'=') {
                 let end = bm_next0(opch, e2, n);
-                let g = gt_run_split(t, src, st, opch, kind, n, e2, end - e2);
+                // Keyword kinds are final only below this window's batch.
+                let g = gt_run_split(
+                    t,
+                    src,
+                    st,
+                    opch,
+                    kind,
+                    n,
+                    e2,
+                    end - e2,
+                    lanes.module,
+                    ((e2 >> 6) & !(KWB - 1)) << 6,
+                );
                 if g != 0 {
                     // The split `>`s stay single tokens, but whatever borders on them is still an operator run and has to be
                     // munched, or a following `&&` / `??` / `**` is emitted a byte at a time.

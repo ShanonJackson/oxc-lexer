@@ -40,10 +40,6 @@ pub fn hex_val(c: u8) -> u32 {
     }
     255
 }
-#[inline(always)]
-pub fn is_glue_join(c: u8) -> bool {
-    is_word(c) || c == b'.' || c == b'+' || c == b'-' || c == b'?'
-}
 
 pub const KWINIT_LO: [u8; 16] = [0, 1, 3, 3, 3, 1, 3, 3, 0, 3, 0, 0, 1, 0, 1, 1];
 pub const KWINIT_HI: [u8; 16] = [0, 0, 0, 0, 0, 0, 1, 2, 0, 0, 0, 0, 0, 0, 0, 0];

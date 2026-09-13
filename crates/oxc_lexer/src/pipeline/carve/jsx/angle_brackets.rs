@@ -6,7 +6,7 @@ use crate::{
 
 use super::super::super::{
     bitmap::bm_get,
-    disambiguate::{jsx_site_is_expression, ts_type_region_open, type_parameter_list_head},
+    disambiguate::jsx_ambiguous_verdict,
     find::{find_line_terminator, unicode_ws_len},
     scan::scan_block_comment,
 };
@@ -151,19 +151,12 @@ unsafe fn jsx_ambiguous_site(
     lp: usize,
     lanes: &mut Lanes,
 ) -> bool {
-    if ts_type_region_open(t, src, st, opch, kind, n, lt) {
-        return false;
+    let generic = generic_fn_type_after(src, n, lp);
+    let (jsx, diag) = jsx_ambiguous_verdict(t, src, st, opch, kind, n, lt, generic, lanes.module);
+    if diag {
+        lanes.push_diag(lt as u32, (gt + 1 - lt) as u32, diag_code::UNTERMINATED_JSX_ELEMENT);
     }
-    if type_parameter_list_head(t, src, st, opch, kind, n, lt) {
-        return false;
-    }
-    if generic_fn_type_after(src, n, lp) {
-        if jsx_site_is_expression(t, src, st, opch, kind, n, lt) {
-            lanes.push_diag(lt as u32, (gt + 1 - lt) as u32, diag_code::UNTERMINATED_JSX_ELEMENT);
-        }
-        return false;
-    }
-    true
+    jsx
 }
 
 unsafe fn generic_fn_type_after(src: *const u8, n: usize, lp: usize) -> bool {

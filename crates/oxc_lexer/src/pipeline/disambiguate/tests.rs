@@ -1249,9 +1249,85 @@ fn relational_heads_before_a_balanced_run() {
     division("x = this<A<B>> / 2;", true);
     regex("x ? a : [b][c]()\n{}\n/y/.exec(s);", false);
     regex("f(class { accessor x = y })\n{ }\n/</.test(s);", false);
+    // `b<c<d>>` is not a type-argument list: its closing `>` is glued to another `>` and rescans as
+    // `>>` (tsc's `reScanGreaterToken`), so every `<` compares and the run is `>>>` + `>`.
     let ks = kinds_of("x = a > b<c<d>>>>(e);", true, false);
-    assert_eq!(ks.iter().filter(|k| **k == TokenKind::Gt).count(), 3, "{ks:?}");
-    assert!(ks.contains(&TokenKind::RShift), "{ks:?}");
+    assert_eq!(ks.iter().filter(|k| **k == TokenKind::Gt).count(), 2, "{ks:?}");
+    assert!(ks.contains(&TokenKind::URShift), "{ks:?}");
+}
+
+#[test]
+fn gt_runs_in_declaration_files_from_the_corpus_sweep() {
+    // Shapes real `.d.ts` files produce (found by `lexer_sweep` over node_modules trees).
+    gt_run_split(
+        "type A<O, D extends S<Omit<Required<O>, K<O>> & P<R<K<O>, never>>>, S extends O> = IfAny<S, D, IfNever<S, D, Simplify<Merge<D, {[Key in keyof S as Key extends OK<O> ? undefined extends S[Key] ? never : Key : Key]: S[Key]}> & Required<O>>>>;",
+    );
+    gt_run_split(
+        "declare class E {\n  response: Response | null\n  awaiting: Set<Promise<void>>\n  constructor(req: R)\n}",
+    );
+    gt_run_split(
+        "export type H<T> = {\n  onDragStart: Handler<'drag', check<T, 'drag'>>\n  onDragEnd: Handler<'drag', check<T, 'drag'>>\n}",
+    );
+    gt_run_split(
+        "declare class L {\n  /** doc */\n  finally: Promise<Result<RootNode>>['finally']\n  then: Promise<Result<Root>>['then']\n}",
+    );
+    gt_run_split(
+        "declare type Fn<T extends (...a: any) => any> = (...args: Parameters<T>) => Promise<ReturnType<T>>;",
+    );
+    gt_run_split(
+        "declare class C {\n  request<T, V>(d: D, v?: Variables<V>): Promise<GraphQLClientResponse<T>>\n}",
+    );
+    gt_run_split(
+        "export type P = Omit<Partial<Pick<Fiber.Overwrite<Props, import(\"fiber\").EventHandlers>>>, Omit<import(\"fiber\").X, never>>;",
+    );
+}
+
+#[test]
+fn gt_runs_in_real_declaration_files() {
+    // Shapes from `.d.ts` files where a corpus sweep found a fused `>` run: signatures separated
+    // only by line breaks, arrows in conditional-type branches, `import("m")` chains in lists.
+    let cases: &[(&str, &str)] = &[
+        (
+            "graphql",
+            "interface RawRequestMethod {\n  <T, V extends Variables = Variables>(query: string, variables?: V, requestHeaders?: GraphQLClientRequestHeaders): Promise<GraphQLClientResponse<T>>\n  <T, V extends Variables = Variables>(options: RawRequestOptions<V>): Promise<GraphQLClientResponse<T>>\n}\n",
+        ),
+        (
+            "jest-worker",
+            "declare type Promisify<T extends FunctionLike> = ReturnType<T> extends Promise<\n  infer R\n>\n  ? (...args: Parameters<T>) => Promise<R>\n  : (...args: Parameters<T>) => Promise<ReturnType<T>>;\n\ndeclare type QueueChildMessage = {\n};\n",
+        ),
+        (
+            "drei",
+            "export declare const Cloud: import(\"react\").ForwardRefExoticComponent<Omit<import(\"@react-three/fiber/dist/declarations/src/core/utils\").Mutable<import(\"@react-three/fiber/dist/declarations/src/core/utils\").Overwrite<Partial<import(\"@react-three/fiber/dist/declarations/src/core/utils\").Overwrite<Group<import(\"three\").Object3DEventMap>, ReactThreeFiber.MathProps<Group<import(\"three\").Object3DEventMap>> & ReactThreeFiber.ReactProps<Group<import(\"three\").Object3DEventMap>> & Partial<import(\"@react-three/fiber\").EventHandlers>>>, Omit<import(\"@react-three/fiber\").Instance, never>>>, \"ref\"> & import(\"react\").RefAttributes<Group>>;\n",
+        ),
+        (
+            "undici",
+            "declare class Dispatcher {\n  dispatch (options: Dispatcher.DispatchOptions, handler: Dispatcher.DispatchHandler): boolean\n  /** doc */\n  connect<TOpaque = null>(options: Dispatcher.ConnectOptions<TOpaque>, callback: (err: Error | null, data: Dispatcher.ConnectData<TOpaque>) => void): void\n  connect<TOpaque = null>(options: Dispatcher.ConnectOptions<TOpaque>): Promise<Dispatcher.ConnectData<TOpaque>>\n  /** Compose */\n  compose(): void\n}\n",
+        ),
+        (
+            "vite",
+            "export interface ImportGlobFunction {\n  <Eager extends boolean, As extends string, T = unknown>(\n    glob: string | string[],\n    options?: ImportGlobOptions<Eager, As, BaseQueryType>,\n  ): (Eager extends true ? true : false) extends true\n    ? Record<string, T>\n    : Record<string, () => Promise<T>>\n  /**\n   * Overload 2\n   */\n  <M>(\n    glob: string | string[],\n    options?: ImportGlobOptions<false, string, BaseQueryType>,\n  ): Record<string, () => Promise<M>>\n  /** doc */\n  <M>(glob: string): Record<string, M>\n}\n",
+        ),
+        (
+            "storybook-preview",
+            "export declare const parameters: {\n    docs: {\n        getContainer: () => Promise<import(\"react\").FunctionComponent<import(\"./blocks\").DocsContainerProps<import(\"@storybook/csf\").AnyFramework>>>;\n        getPage: () => Promise<import(\"react\").FunctionComponent<{}>>;\n    };\n};\n",
+        ),
+        (
+            "storybook-class",
+            "declare class PreviewWeb<TFramework extends AnyFramework> {\n    teardownRender(render: Render<TFramework>, { viewModeChanged }?: {\n        viewModeChanged?: boolean;\n    }): Promise<void>;\n    extract(options?: {\n        includeDocsOnly: boolean;\n    }): Promise<Record<string, import(\"@storybook/csf\").StoryContextForEnhancers<TFramework, Args>>>;\n    mainStoryCallbacks(storyId: StoryId): void;\n}\n",
+        ),
+        (
+            "immer-a",
+            "export interface IProduce {\n\t/** Curried producer with initial state */\n\t<\n\t\tRecipe extends (...args: any[]) => any,\n\t\tParams extends any[] = Parameters<Recipe>,\n\t\tT = Params[0]\n\t>(\n\t\trecipe: Recipe,\n\t\tinitialState: Immutable<T>\n\t): <Base extends Immutable<T>>(\n\t\tbase?: Base,\n\t\t...rest: Tail<Params>\n\t) => Produced<Base, ReturnType<Recipe>>\n\n\t/** Normal producer */\n\t<Base, D = Draft<Base>>(\n\t\tbase: Base,\n\t\trecipe: (draft: D) => ValidRecipeReturnType<D>,\n\t\tlistener?: PatchListener\n\t): Base\n}\n",
+        ),
+        (
+            "immer-b",
+            "export interface IProduce {\n\t<State, Recipe extends Function>(\n\t\trecipe: Recipe,\n\t\tinitialState: State\n\t): InferCurriedFromInitialStateAndRecipe<State, Recipe, false>\n\n\t/** Normal producer */\n\t<Base, D = Draft<Base>>( // By using a default inferred D, rather than Draft<Base> in the recipe, we can override it.\n\t\tbase: Base,\n\t\trecipe: (draft: D) => ValidRecipeReturnType<D>,\n\t\tlistener?: PatchListener\n\t): Base\n}\n",
+        ),
+    ];
+    for (name, code) in cases {
+        let ks = kinds_of(code, true, false);
+        assert!(!ks.iter().any(|k| is_fused_gt(*k)), "{name}: {ks:?}");
+    }
 }
 
 #[test]
