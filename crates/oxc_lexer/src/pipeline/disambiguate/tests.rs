@@ -1257,76 +1257,52 @@ fn relational_heads_before_a_balanced_run() {
 }
 
 #[test]
-fn gt_runs_in_declaration_files_from_the_corpus_sweep() {
-    // Shapes real `.d.ts` files produce (found by `lexer_sweep` over node_modules trees).
-    gt_run_split(
-        "type A<O, D extends S<Omit<Required<O>, K<O>> & P<R<K<O>, never>>>, S extends O> = IfAny<S, D, IfNever<S, D, Simplify<Merge<D, {[Key in keyof S as Key extends OK<O> ? undefined extends S[Key] ? never : Key : Key]: S[Key]}> & Required<O>>>>;",
-    );
-    gt_run_split(
-        "declare class E {\n  response: Response | null\n  awaiting: Set<Promise<void>>\n  constructor(req: R)\n}",
-    );
-    gt_run_split(
-        "export type H<T> = {\n  onDragStart: Handler<'drag', check<T, 'drag'>>\n  onDragEnd: Handler<'drag', check<T, 'drag'>>\n}",
-    );
-    gt_run_split(
-        "declare class L {\n  /** doc */\n  finally: Promise<Result<RootNode>>['finally']\n  then: Promise<Result<Root>>['then']\n}",
-    );
-    gt_run_split(
-        "declare type Fn<T extends (...a: any) => any> = (...args: Parameters<T>) => Promise<ReturnType<T>>;",
-    );
-    gt_run_split(
-        "declare class C {\n  request<T, V>(d: D, v?: Variables<V>): Promise<GraphQLClientResponse<T>>\n}",
-    );
-    gt_run_split(
-        "export type P = Omit<Partial<Pick<Fiber.Overwrite<Props, import(\"fiber\").EventHandlers>>>, Omit<import(\"fiber\").X, never>>;",
-    );
+fn gt_runs_in_members_separated_only_by_line_breaks() {
+    // Without a `;` or `,` between members, the line break after the run ends the member: the
+    // name on the next line is another member, not the operand of a comparison, and a `<` there
+    // opens a signature's type parameters.
+    for code in [
+        "declare class C {\n  a: A\n  b: B<C<void>>\n  constructor(r: R)\n}",
+        "type T = {\n  a: A<'x', B<T, 'x'>>\n  b: A<'x', B<T, 'x'>>\n}",
+        "declare class C {\n  then: A<B<C>>['then']\n  finally: A<B<C>>\n}",
+        "let o: {\n  in: A<B<C>>\n  of: A<B<C>>\n} = y;",
+        "declare class C {\n  a(): void\n  b<T = null>(o: O<T>): P<Q<T>>\n}",
+        "interface I {\n  <T, V = W>(a: A, v?: V): P<Q<T>>\n  <T, V = W>(o: O<V>): P<Q<T>>\n}",
+        "interface I {\n  <T>(a: A): B extends C ? D : () => E<T>\n  <M>(b: B): E<F<M>>\n}",
+    ] {
+        gt_run_split(code);
+    }
 }
 
 #[test]
-fn gt_runs_in_real_declaration_files() {
-    // Shapes from `.d.ts` files where a corpus sweep found a fused `>` run: signatures separated
-    // only by line breaks, arrows in conditional-type branches, `import("m")` chains in lists.
-    let cases: &[(&str, &str)] = &[
-        (
-            "graphql",
-            "interface RawRequestMethod {\n  <T, V extends Variables = Variables>(query: string, variables?: V, requestHeaders?: GraphQLClientRequestHeaders): Promise<GraphQLClientResponse<T>>\n  <T, V extends Variables = Variables>(options: RawRequestOptions<V>): Promise<GraphQLClientResponse<T>>\n}\n",
-        ),
-        (
-            "jest-worker",
-            "declare type Promisify<T extends FunctionLike> = ReturnType<T> extends Promise<\n  infer R\n>\n  ? (...args: Parameters<T>) => Promise<R>\n  : (...args: Parameters<T>) => Promise<ReturnType<T>>;\n\ndeclare type QueueChildMessage = {\n};\n",
-        ),
-        (
-            "drei",
-            "export declare const Cloud: import(\"react\").ForwardRefExoticComponent<Omit<import(\"@react-three/fiber/dist/declarations/src/core/utils\").Mutable<import(\"@react-three/fiber/dist/declarations/src/core/utils\").Overwrite<Partial<import(\"@react-three/fiber/dist/declarations/src/core/utils\").Overwrite<Group<import(\"three\").Object3DEventMap>, ReactThreeFiber.MathProps<Group<import(\"three\").Object3DEventMap>> & ReactThreeFiber.ReactProps<Group<import(\"three\").Object3DEventMap>> & Partial<import(\"@react-three/fiber\").EventHandlers>>>, Omit<import(\"@react-three/fiber\").Instance, never>>>, \"ref\"> & import(\"react\").RefAttributes<Group>>;\n",
-        ),
-        (
-            "undici",
-            "declare class Dispatcher {\n  dispatch (options: Dispatcher.DispatchOptions, handler: Dispatcher.DispatchHandler): boolean\n  /** doc */\n  connect<TOpaque = null>(options: Dispatcher.ConnectOptions<TOpaque>, callback: (err: Error | null, data: Dispatcher.ConnectData<TOpaque>) => void): void\n  connect<TOpaque = null>(options: Dispatcher.ConnectOptions<TOpaque>): Promise<Dispatcher.ConnectData<TOpaque>>\n  /** Compose */\n  compose(): void\n}\n",
-        ),
-        (
-            "vite",
-            "export interface ImportGlobFunction {\n  <Eager extends boolean, As extends string, T = unknown>(\n    glob: string | string[],\n    options?: ImportGlobOptions<Eager, As, BaseQueryType>,\n  ): (Eager extends true ? true : false) extends true\n    ? Record<string, T>\n    : Record<string, () => Promise<T>>\n  /**\n   * Overload 2\n   */\n  <M>(\n    glob: string | string[],\n    options?: ImportGlobOptions<false, string, BaseQueryType>,\n  ): Record<string, () => Promise<M>>\n  /** doc */\n  <M>(glob: string): Record<string, M>\n}\n",
-        ),
-        (
-            "storybook-preview",
-            "export declare const parameters: {\n    docs: {\n        getContainer: () => Promise<import(\"react\").FunctionComponent<import(\"./blocks\").DocsContainerProps<import(\"@storybook/csf\").AnyFramework>>>;\n        getPage: () => Promise<import(\"react\").FunctionComponent<{}>>;\n    };\n};\n",
-        ),
-        (
-            "storybook-class",
-            "declare class PreviewWeb<TFramework extends AnyFramework> {\n    teardownRender(render: Render<TFramework>, { viewModeChanged }?: {\n        viewModeChanged?: boolean;\n    }): Promise<void>;\n    extract(options?: {\n        includeDocsOnly: boolean;\n    }): Promise<Record<string, import(\"@storybook/csf\").StoryContextForEnhancers<TFramework, Args>>>;\n    mainStoryCallbacks(storyId: StoryId): void;\n}\n",
-        ),
-        (
-            "immer-a",
-            "export interface IProduce {\n\t/** Curried producer with initial state */\n\t<\n\t\tRecipe extends (...args: any[]) => any,\n\t\tParams extends any[] = Parameters<Recipe>,\n\t\tT = Params[0]\n\t>(\n\t\trecipe: Recipe,\n\t\tinitialState: Immutable<T>\n\t): <Base extends Immutable<T>>(\n\t\tbase?: Base,\n\t\t...rest: Tail<Params>\n\t) => Produced<Base, ReturnType<Recipe>>\n\n\t/** Normal producer */\n\t<Base, D = Draft<Base>>(\n\t\tbase: Base,\n\t\trecipe: (draft: D) => ValidRecipeReturnType<D>,\n\t\tlistener?: PatchListener\n\t): Base\n}\n",
-        ),
-        (
-            "immer-b",
-            "export interface IProduce {\n\t<State, Recipe extends Function>(\n\t\trecipe: Recipe,\n\t\tinitialState: State\n\t): InferCurriedFromInitialStateAndRecipe<State, Recipe, false>\n\n\t/** Normal producer */\n\t<Base, D = Draft<Base>>( // By using a default inferred D, rather than Draft<Base> in the recipe, we can override it.\n\t\tbase: Base,\n\t\trecipe: (draft: D) => ValidRecipeReturnType<D>,\n\t\tlistener?: PatchListener\n\t): Base\n}\n",
-        ),
-    ];
-    for (name, code) in cases {
-        let ks = kinds_of(code, true, false);
-        assert!(!ks.iter().any(|k| is_fused_gt(*k)), "{name}: {ks:?}");
+fn gt_runs_after_arrows_mapped_types_and_import_types_inside_lists() {
+    // An arrow in a conditional type's branch, a mapped type with an `as` clause, or an
+    // `import("m")` chain inside a type-argument list does not end the list: the run after it
+    // still closes it.
+    for code in [
+        "type P<T> = T extends U ? (a: A) => B<T> : (a: A) => B<C<T>>;",
+        "type P<T> = R<T> extends Q<\n  infer U\n>\n  ? (...a: A<T>) => B<U>\n  : (...a: A<T>) => B<C<T>>;",
+        "type T = A<B<C, D<E, { [K in keyof S as K extends F ? never : K]: S[K] }> & G<H>>>;",
+        "declare const c: import(\"m\").A<B<import(\"m\").C<D<import(\"m\").E<F, G.H & G.I>>, J<import(\"m\").K, never>>>, \"ref\"> & import(\"m\").L<F>;",
+        "declare const p: {\n  a: {\n    b: () => P<import(\"m\").Q<import(\"n\").R<import(\"o\").S>>>;\n  };\n};",
+    ] {
+        gt_run_split(code);
+    }
+}
+
+#[test]
+fn gt_runs_after_parameter_lists_inside_types() {
+    // A run after a parameter list inside a type: rest and optional parameters, object types as
+    // parameter types, and multi-line type parameter lists.
+    for code in [
+        "type F<T extends (...a: any) => any> = (...a: P<T>) => Q<R<T>>;",
+        "declare class C {\n  m<T, V>(d: D, v?: X<V>): P<Q<T>>\n}",
+        "type P = A<B<C<D.E<F, import(\"m\").G>>>, H<import(\"m\").I, never>>;",
+        "declare class C {\n  m(r: R<T>, { a }?: {\n    a?: boolean;\n  }): P<void>;\n  n(o?: {\n    b: boolean;\n  }): P<Q<R, import(\"m\").S<T, U>>>;\n}",
+        "interface I {\n  <\n    A extends (...a: any[]) => any,\n    B = C<A>\n  >(a: A): <D extends E<A>>(d?: D, ...r: F<B>) => G<D, H<A>>\n\n  <J, K = L<J>>(j: J): J\n}",
+        "interface I {\n  <A>(a: A): B<A>\n\n  <C, D = E<C>>( // note\n    c: C\n  ): C\n}",
+    ] {
+        gt_run_split(code);
     }
 }
 
