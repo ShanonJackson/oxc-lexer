@@ -8,8 +8,9 @@
 //!
 //! The walk is lazy and reads the carved bitmaps as carve left them: keywords are still
 //! identifiers, multi-byte operators are still one token start per byte, and `misc_pre` has already
-//! split Unicode whitespace. Sites ask in source order, so the walk never rewinds in practice; a
-//! query behind the current position rebuilds from the start.
+//! split Unicode whitespace. A query walks from a nearby anchor whose context is certain (see
+//! `anchor`), skipping the groups and members the scan back to it recorded; the memoized walk from
+//! the start of the source answers when no anchor is in reach.
 
 use core::cell::{Cell, RefCell};
 
@@ -29,8 +30,8 @@ use super::{
     type_list_legal,
 };
 
-mod seed;
-pub(super) use seed::{after, after_from, angles_before, before};
+mod anchor;
+pub(super) use anchor::{after, after_from, angles_before, before};
 
 #[cfg(test)]
 mod tests;
@@ -239,16 +240,35 @@ impl Frame {
     }
 }
 
+/// A jump a bounded walk takes after stepping the token at `at`.
+#[derive(Clone, Copy)]
+pub(super) enum Jump {
+    /// `at` opens a balanced group whose closer is at `to`: the walk resumes at the closer.
+    Skip { at: u32, to: u32 },
+    /// `at` is a `<` balanced by the `>` at `to`: the walk resumes there if it read the `<` as a
+    /// list opener (a comparison walks on).
+    Angle { at: u32, to: u32 },
+    /// `at` opens a frame (or is an anchor inside one) holding the last `;` and `,` at `semi` /
+    /// `comma` and the last `}` boundary at `brace` (0: none) before the query: the walk resumes
+    /// at the nearest one its frame kind allows. A brace boundary is the token after a `}` that
+    /// must start a statement or member, so the frame is reset as a `;` would.
+    Sep { at: u32, semi: u32, comma: u32, brace: u32 },
+    /// First entry of a continued walk: the last `;` / brace boundary of the frame the walk is in,
+    /// where it may resume once its virtual frames are dropped (a `;` drops them too).
+    Resume { semi: u32, brace: u32 },
+}
+
 pub(super) struct Walk {
     generation: u64,
-    /// Frame count right after seeding a bounded walk (0: unseeded); the walk stays valid while
-    /// that frame is on the stack.
+    /// Frame count right after a bounded walk started at its anchor (0: the full walk); the walk
+    /// stays valid while that frame is on the stack.
     seed_depth: usize,
-    /// A bounded walk popped its seed frame (or an unbalanced closer): its state is a guess from
-    /// here on.
+    /// A bounded walk popped its anchor frame (or met an unbalanced closer): its state is a guess
+    /// from here on.
     seed_lost: bool,
-    /// The seed answers one query only (its frames are a guess past it).
-    seed_once: bool,
+    /// Jumps of the current bounded walk, in source order, and the next one to consider.
+    pub(super) plan: Vec<Jump>,
+    pub(super) plan_next: usize,
     frames: Vec<Frame>,
     /// Next unprocessed byte position: every token start below it has been walked.
     upto: usize,
@@ -297,7 +317,7 @@ thread_local! {
     static GEN: Cell<u64> = const { Cell::new(0) };
     /// The full walk from the start of the source (memoized).
     static WALK: RefCell<Walk> = RefCell::new(Walk::new());
-    /// A bounded walk seeded at a boundary near the query.
+    /// A bounded walk started at an anchor near the query.
     static LOCAL: RefCell<Walk> = RefCell::new(Walk::new());
 }
 
@@ -331,7 +351,8 @@ impl Walk {
             generation: u64::MAX,
             seed_depth: 0,
             seed_lost: false,
-            seed_once: false,
+            plan: Vec::with_capacity(64),
+            plan_next: 0,
             frames: Vec::with_capacity(64),
             upto: 0,
             expr_allowed: true,
@@ -400,7 +421,6 @@ impl Walk {
         self.no_type_args = false;
         self.seed_depth = 0;
         self.seed_lost = false;
-        self.seed_once = false;
     }
 
     #[inline]
@@ -785,6 +805,23 @@ pub(super) unsafe fn after_scoped(cx: Cx, module: bool, pos: usize) -> After {
     })
 }
 
+/// TypeScript's speculative parse of a type-argument list at the `<` at `lt` in expression
+/// position: a balanced list whose contents are types and whose closer is followed by a token that
+/// cannot start an expression. In a type, every `<` opens a list, so a `<` this accepts opens one in
+/// any context.
+pub(super) unsafe fn type_args_at(cx: Cx, lt: usize) -> bool {
+    let lim = (lt + 4096).min(cx.n);
+    let (close, _capped) = angle_close_fwd_capped(cx.src, cx.st, cx.opch, cx.kind, lt + 1, lim, 1);
+    let Some(gt) = close else { return false };
+    if matches!(*cx.src.add(gt + 1), b'=' | b'>') {
+        return false;
+    }
+    match gt_follower(cx.src, cx.n, gt + 1) {
+        Follow::Split => type_list_legal(cx.t, cx.src, cx.st, cx.kind, lt + 1, gt),
+        Follow::Fuse | Follow::Ctx => false,
+    }
+}
+
 impl Walk {
     fn advance(&mut self, cx: Cx, limit: usize) {
         let mut pos = self.upto;
@@ -793,9 +830,169 @@ impl Walk {
             if pos >= limit || pos >= cx.n {
                 break;
             }
-            pos = unsafe { self.step(cx, pos) };
+            let end = unsafe { self.step(cx, pos) };
+            pos = self.jump(pos, end, limit);
         }
         self.upto = pos.max(self.upto);
+    }
+
+    /// After stepping the token at `pos` (ending at `end`): the next position to walk, following a
+    /// planned jump when the token opens a group or a frame that allows one. A jump lands on a
+    /// closer or separator, so no line break is reported before it.
+    fn jump(&mut self, pos: usize, end: usize, limit: usize) -> usize {
+        while self.plan_next < self.plan.len() {
+            let j = self.plan[self.plan_next];
+            let at = match j {
+                Jump::Skip { at, .. } | Jump::Angle { at, .. } | Jump::Sep { at, .. } => {
+                    at as usize
+                }
+                Jump::Resume { .. } => {
+                    self.plan_next += 1;
+                    continue;
+                }
+            };
+            if at > pos {
+                break;
+            }
+            self.plan_next += 1;
+            if at < pos {
+                continue;
+            }
+            let to = match j {
+                Jump::Resume { .. } => 0,
+                Jump::Skip { to, .. } => to as usize,
+                Jump::Angle { to, .. } => {
+                    if self.top_kind() == Fk::Angle {
+                        to as usize
+                    } else {
+                        0
+                    }
+                }
+                Jump::Sep { semi, comma, brace, .. } => {
+                    let semi = if semi != 0 && self.sep_allowed(b';') { semi as usize } else { 0 };
+                    let comma =
+                        if comma != 0 && self.sep_allowed(b',') { comma as usize } else { 0 };
+                    let brace =
+                        if brace != 0 && self.sep_allowed(b'}') { brace as usize } else { 0 };
+                    let to = semi.max(comma).max(brace);
+                    if to == brace && to > pos && to <= limit {
+                        self.resume_member();
+                    }
+                    to
+                }
+            };
+            if to > pos && to <= limit {
+                self.prev_end = to;
+                return to;
+            }
+        }
+        end
+    }
+
+    /// A continued walk: jump to the nearest of the `;` at `semi` and the brace boundary at
+    /// `brace` (0: none) before `limit` that its innermost bracket frame allows.
+    pub(super) fn resume(&mut self, semi: usize, brace: usize, limit: usize) {
+        let mut i = self.frames.len() - 1;
+        while matches!(
+            self.frames[i].kind,
+            Fk::Concise | Fk::TypeRegion | Fk::Angle | Fk::FnHead | Fk::ClassHead
+        ) && i > 0
+        {
+            i -= 1;
+        }
+        let k = self.frames[i].kind;
+        let semi = if semi != 0 && Self::sep_allowed_in(k, b';') { semi } else { 0 };
+        let brace = if brace != 0 && Self::sep_allowed_in(k, b'}') { brace } else { 0 };
+        let to = semi.max(brace);
+        if to <= self.upto || to > limit {
+            return;
+        }
+        self.pop_virtual();
+        if to == brace {
+            self.resume_member();
+        }
+        self.upto = to;
+        self.prev_end = to;
+        while self.plan_next < self.plan.len() {
+            let at = match self.plan[self.plan_next] {
+                Jump::Skip { at, .. } | Jump::Angle { at, .. } | Jump::Sep { at, .. } => {
+                    at as usize
+                }
+                Jump::Resume { .. } => 0,
+            };
+            if at >= to {
+                break;
+            }
+            self.plan_next += 1;
+        }
+    }
+
+    /// The state at a member or statement start after a `}` in the innermost frame: what its `;`
+    /// would leave.
+    fn resume_member(&mut self) {
+        if self.top_kind() == Fk::ClassBody {
+            let f = self.top_mut();
+            f.s = M_KEY_POS;
+            f.mods = 0;
+            self.operand_done();
+        } else {
+            self.end_statement();
+            self.clear_prev();
+        }
+    }
+
+    /// Can the walk resume at a `;` / `,` of the innermost frame, or after a `}` boundary in it?
+    /// Only where the separator resets the frame: statements after `;`, members and elements after
+    /// `,`, statements and members after a body or a nested literal.
+    fn sep_allowed(&self, sep: u8) -> bool {
+        Self::sep_allowed_in(self.top_kind(), sep)
+    }
+
+    fn sep_allowed_in(k: Fk, sep: u8) -> bool {
+        if sep == b'}' {
+            return matches!(
+                k,
+                Fk::Root
+                    | Fk::Block
+                    | Fk::FnBody
+                    | Fk::ArrowBody
+                    | Fk::StaticBlock
+                    | Fk::ClassBody
+                    | Fk::TypeLit
+            );
+        }
+        if sep == b';' {
+            matches!(
+                k,
+                Fk::Root
+                    | Fk::Block
+                    | Fk::FnBody
+                    | Fk::ArrowBody
+                    | Fk::StaticBlock
+                    | Fk::ClassBody
+                    | Fk::TypeLit
+                    | Fk::Head
+            )
+        } else {
+            matches!(
+                k,
+                Fk::Object
+                    | Fk::Array
+                    | Fk::Call
+                    | Fk::Params
+                    | Fk::Group
+                    | Fk::TypeLit
+                    | Fk::EnumBody
+                    | Fk::ModuleSpec
+                    | Fk::Pattern
+                    | Fk::ArrayPattern
+                    | Fk::Index
+                    | Fk::TypeParen
+                    | Fk::TypeBracket
+                    | Fk::Head
+                    | Fk::Sub
+            )
+        }
     }
 
     /// Process the single token at `pos` (which must be the next unprocessed token) and report what
@@ -2358,17 +2555,7 @@ impl Walk {
     /// TypeScript's speculative parse of a type-argument list in expression position, on the
     /// forward scans `coalesce` already uses.
     unsafe fn expr_type_args(&mut self, cx: Cx, lt: usize) -> bool {
-        let lim = (lt + 4096).min(cx.n);
-        let (close, _capped) =
-            angle_close_fwd_capped(cx.src, cx.st, cx.opch, cx.kind, lt + 1, lim, 1);
-        let Some(gt) = close else { return false };
-        if matches!(*cx.src.add(gt + 1), b'=' | b'>') {
-            return false;
-        }
-        match gt_follower(cx.src, cx.n, gt + 1) {
-            Follow::Split => type_list_legal(cx.t, cx.src, cx.st, cx.kind, lt + 1, gt),
-            Follow::Fuse | Follow::Ctx => false,
-        }
+        type_args_at(cx, lt)
     }
 
     unsafe fn arrow(&mut self, cx: Cx, pos: usize) {

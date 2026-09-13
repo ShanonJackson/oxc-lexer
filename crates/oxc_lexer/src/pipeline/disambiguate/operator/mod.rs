@@ -140,17 +140,17 @@ pub(crate) unsafe fn not_operator_position(
                 return true;
             }
             if ch == b'}' {
-                let from = match_delim_back(src, st, kind, qi, b'{', b'}').unwrap_or(qi);
+                let from = match_delim_back(src, st, kind, n, qi, b'{', b'}').unwrap_or(qi);
                 return walk::after_from(cx, module, qi, from) != WalkAfter::Value;
             }
             if ch == b')' {
-                if paren_close_is_regex(src, st, kind, qi) {
+                if paren_close_is_regex(src, st, kind, n, qi) {
                     return true;
                 }
                 if !(ts && lt_in_range(src, qi + 1, p)) {
                     return false;
                 }
-                let from = match_delim_back(src, st, kind, qi, b'(', b')').unwrap_or(qi);
+                let from = match_delim_back(src, st, kind, n, qi, b'(', b')').unwrap_or(qi);
                 return walk::after_from(cx, module, qi, from) == WalkAfter::EndsDecl;
             }
             if ts && ch == b'>' && !(qi > 0 && *src.add(qi - 1) == b'=') {
@@ -160,7 +160,7 @@ pub(crate) unsafe fn not_operator_position(
                 if !(ts && lt_in_range(src, qi + 1, p)) {
                     return false;
                 }
-                let from = match_delim_back(src, st, kind, qi, b'[', b']').unwrap_or(qi);
+                let from = match_delim_back(src, st, kind, n, qi, b'[', b']').unwrap_or(qi);
                 return walk::after_from(cx, module, qi, from) == WalkAfter::EndsDecl;
             }
             return true;
@@ -284,8 +284,14 @@ unsafe fn tail_before(
     matches!(sk, NUM | BIGINT | STR | TMPL_NOSUB | TMPL_TAIL | REGEX | PRIV_IDENT)
 }
 
-unsafe fn paren_close_is_regex(src: *const u8, st: *const u64, kind: *const u8, qi: usize) -> bool {
-    let Some(lp) = match_delim_back(src, st, kind, qi, b'(', b')') else {
+unsafe fn paren_close_is_regex(
+    src: *const u8,
+    st: *const u64,
+    kind: *const u8,
+    n: usize,
+    qi: usize,
+) -> bool {
+    let Some(lp) = match_delim_back(src, st, kind, n, qi, b'(', b')') else {
         return false;
     };
     let q = bm_prev_sig(st, kind, lp);

@@ -53,10 +53,12 @@ unsafe fn trivia_at(src: *const u8, i: usize) -> Option<(bool, usize)> {
     }
 }
 
-/// Distance cap (in token starts) for the backward delimiter matches below;
-/// past it we fall back to the safe legacy "`}` means regex" answer. Only
-/// pathological input gets near it.
+/// Step cap for the backward delimiter matches below; past it the per-file closer-to-opener table
+/// answers. Only pathological input gets near it.
 const BRACE_MATCH_CAP: u32 = 1024;
+
+/// Token-start steps a bracket match takes before switching to the bracket bitmap.
+const DELIM_TOKEN_STEPS: u32 = 16;
 
 /// Previous significant token start before `pos` (skipping trivia), or -1 at
 /// start of input.
@@ -107,6 +109,85 @@ unsafe fn ident_is(src: *const u8, pos: usize, kw: &[u8]) -> bool {
     !is_word(*src.add(after)) || trivia_at(src, after).is_some()
 }
 
+/// Bracket tokens (`(){}[]` at token starts) as a bitmap, built per lex as far as the queries
+/// reach: crossing a group then costs a step per bracket, not per token.
+struct Brackets {
+    generation: u64,
+    /// Words built so far.
+    words: usize,
+    bits: Vec<u64>,
+}
+
+thread_local! {
+    static BRACKETS: RefCell<Brackets> = const {
+        RefCell::new(Brackets { generation: 0, words: 0, bits: Vec::new() })
+    };
+}
+
+/// The bracket bitmap covering `0..upto`. The pointer stays valid for the lex: the buffer is sized
+/// once per generation.
+unsafe fn brackets_upto(src: *const u8, st: *const u64, n: usize, upto: usize) -> *const u64 {
+    let generation = MEMO_GEN.with(Cell::get);
+    BRACKETS.with(|cell| {
+        let mut b = cell.borrow_mut();
+        let nwords = n.div_ceil(64) + 1;
+        if b.generation != generation || b.bits.len() != nwords {
+            b.generation = generation;
+            b.words = 0;
+            b.bits.clear();
+            b.bits.resize(nwords, 0);
+        }
+        let need = (upto.min(n) >> 6) + 1;
+        while b.words < need {
+            let w = b.words;
+            b.bits[w] = bracket_word(src, w << 6, n) & *st.add(w);
+            b.words += 1;
+        }
+        b.bits.as_ptr()
+    })
+}
+
+/// Bits of the 64 bytes at `base` that are brackets (bytes at or past `n` are clear). The source
+/// carries `PAD` bytes past `n`, so a whole word is readable whenever `base < n`.
+#[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+unsafe fn bracket_word(src: *const u8, base: usize, n: usize) -> u64 {
+    use core::arch::x86_64::*;
+    if base >= n {
+        return 0;
+    }
+    let mut out = 0u64;
+    let mut half = 0;
+    while half < 2 {
+        let v = _mm256_loadu_si256(src.add(base + half * 32).cast());
+        let mut m = _mm256_cmpeq_epi8(v, _mm256_set1_epi8(b'(' as i8));
+        m = _mm256_or_si256(m, _mm256_cmpeq_epi8(v, _mm256_set1_epi8(b')' as i8)));
+        m = _mm256_or_si256(m, _mm256_cmpeq_epi8(v, _mm256_set1_epi8(b'[' as i8)));
+        m = _mm256_or_si256(m, _mm256_cmpeq_epi8(v, _mm256_set1_epi8(b']' as i8)));
+        m = _mm256_or_si256(m, _mm256_cmpeq_epi8(v, _mm256_set1_epi8(b'{' as i8)));
+        m = _mm256_or_si256(m, _mm256_cmpeq_epi8(v, _mm256_set1_epi8(b'}' as i8)));
+        out |= (_mm256_movemask_epi8(m) as u32 as u64) << (half * 32);
+        half += 1;
+    }
+    if base + 64 > n {
+        out &= (1u64 << (n - base)) - 1;
+    }
+    out
+}
+
+#[cfg(not(all(target_arch = "x86_64", target_feature = "avx2")))]
+unsafe fn bracket_word(src: *const u8, base: usize, n: usize) -> u64 {
+    let mut out = 0u64;
+    let end = (base + 64).min(n);
+    let mut i = base;
+    while i < end {
+        if matches!(*src.add(i), b'(' | b')' | b'[' | b']' | b'{' | b'}') {
+            out |= 1 << (i - base);
+        }
+        i += 1;
+    }
+    out
+}
+
 struct DelimMemo {
     generation: u64,
     upto: usize,
@@ -150,6 +231,7 @@ unsafe fn delim_memo_opener(
     src: *const u8,
     st: *const u64,
     kind: *const u8,
+    n: usize,
     from: usize,
 ) -> Option<usize> {
     let generation = MEMO_GEN.with(Cell::get);
@@ -163,7 +245,8 @@ unsafe fn delim_memo_opener(
                 stack.clear();
             }
         }
-        let mut w = bm_next1(st, m.upto, from + 1);
+        let br = brackets_upto(src, st, n, from + 1);
+        let mut w = bm_next1(br, m.upto, from + 1);
         while w <= from {
             if *kind.add(w) >= OP_KIND_BASE {
                 let c = *src.add(w);
@@ -177,7 +260,7 @@ unsafe fn delim_memo_opener(
                     _ => {}
                 }
             }
-            w = bm_next1(st, w + 1, from + 1);
+            w = bm_next1(br, w + 1, from + 1);
         }
         m.upto = from + 1;
         match m.pairs.binary_search_by_key(&(from as u32), |pr| pr.0) {
@@ -196,17 +279,23 @@ unsafe fn match_delim_back(
     src: *const u8,
     st: *const u64,
     kind: *const u8,
+    n: usize,
     from: usize,
     open: u8,
     close: u8,
 ) -> Option<usize> {
+    // Small groups (a call's arguments before `/`) are matched over the token starts; a longer
+    // match switches to the bracket bitmap, built as far as needed.
     let mut depth: i32 = 1;
     let mut steps: u32 = 0;
-    let mut q = bm_prev1(st, from);
+    let mut br = st;
+    let mut q = bm_prev1(br, from);
     while q >= 0 {
         steps += 1;
-        if steps > BRACE_MATCH_CAP {
-            return delim_memo_opener(src, st, kind, from);
+        if steps == DELIM_TOKEN_STEPS {
+            br = brackets_upto(src, st, n, from + 1);
+        } else if steps > BRACE_MATCH_CAP {
+            return delim_memo_opener(src, st, kind, n, from);
         }
         let pos = q as usize;
         if *kind.add(pos) >= OP_KIND_BASE {
@@ -220,7 +309,7 @@ unsafe fn match_delim_back(
                 }
             }
         }
-        q = bm_prev1(st, pos);
+        q = bm_prev1(br, pos);
     }
     None
 }
@@ -968,10 +1057,9 @@ pub(super) unsafe fn gt_run_split(
     kw_final: usize,
 ) -> usize {
     let cx = walk::Cx { t, src, st, opch, kind, n, ts: true, kw_final };
-    let angles = walk::angles_before(cx, module, p);
     let mut g = 0usize;
     while g < run && *src.add(p + g) == b'>' {
         g += 1;
     }
-    angles.min(g)
+    walk::angles_before(cx, module, p, g).min(g)
 }
