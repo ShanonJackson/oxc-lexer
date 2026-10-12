@@ -8,12 +8,12 @@ use crate::{
 };
 
 use super::{
+    bcompact::BCOMPACT,
     common::{build_spans as build_spans_scalar, emit_value, invalid_diags},
     pair_luts::get_pair_luts,
 };
 
 static QCOMPACT: [[u32; 8]; 16] = qcompact();
-static BCOMPACT: [[u8; 16]; 256] = bcompact();
 
 const fn qcompact() -> [[u32; 8]; 16] {
     let mut t = [[0u32; 8]; 16];
@@ -27,23 +27,6 @@ const fn qcompact() -> [[u32; 8]; 16] {
                 k += 1;
             }
             q += 1;
-        }
-        mask += 1;
-    }
-    t
-}
-
-const fn bcompact() -> [[u8; 16]; 256] {
-    let mut t = [[0x80u8; 16]; 256];
-    let mut mask = 0usize;
-    while mask < 256 {
-        let (mut b, mut k) = (0usize, 0usize);
-        while b < 8 {
-            if mask & (1 << b) != 0 {
-                t[mask][k] = b as u8;
-                k += 1;
-            }
-            b += 1;
         }
         mask += 1;
     }

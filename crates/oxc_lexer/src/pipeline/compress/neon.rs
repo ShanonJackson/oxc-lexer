@@ -2,14 +2,53 @@ use std::arch::aarch64::*;
 
 use oxc_span::Span;
 
-use crate::{lanes::Lanes, token::tk};
+use crate::{
+    lanes::Lanes,
+    token::{TRIVIA_MAX, TRIVIA_MIN, tk},
+};
 
-use crate::pipeline::chunk::{load128, mm32, mm64, veq};
+use crate::pipeline::chunk::{load128, load_lut, mm32, mm64, veq};
 
 use super::{
-    common::{emit_value, invalid_diags},
+    bcompact::BCOMPACT,
+    common::{build_spans as build_spans_scalar, emit_value, invalid_diags},
     pair_luts::get_pair_luts,
 };
+
+/// For each 4-bit "keep" mask, the byte indices that gather the kept spans out of a 4-span
+/// window, two spans at a time.
+///
+/// A `Span` is 8 bytes, so span `k` of the window is bytes `8k..8k+7`; `TBL` reads a 2-register
+/// window as 32 indexable bytes. `LO` takes the first two kept spans and `HI` the next two, so
+/// between them they move any subset into place with two lookups. Unused lanes are `0x80`, out
+/// of range for `TBL` and so zeroed - the next group's store covers them.
+static SPAN_LO: [[u8; 16]; 16] = span_ctrl(0);
+static SPAN_HI: [[u8; 16]; 16] = span_ctrl(2);
+
+const fn span_ctrl(skip: usize) -> [[u8; 16]; 16] {
+    let mut t = [[0x80u8; 16]; 16];
+    let mut mask = 0usize;
+    while mask < 16 {
+        // Walk the kept spans, and emit the two this half is responsible for.
+        let (mut span, mut kept) = (0usize, 0usize);
+        while span < 4 {
+            if mask & (1 << span) != 0 {
+                if kept >= skip && kept < skip + 2 {
+                    let out = (kept - skip) * 8;
+                    let mut byte = 0usize;
+                    while byte < 8 {
+                        t[mask][out + byte] = (span * 8 + byte) as u8;
+                        byte += 1;
+                    }
+                }
+                kept += 1;
+            }
+            span += 1;
+        }
+        mask += 1;
+    }
+    t
+}
 
 /// Turn the token-start bitmap into a list of token positions and kinds, 16 bits at a time.
 ///
@@ -78,6 +117,93 @@ pub(super) unsafe fn compress_blocks(
         m += o4 as usize;
     }
     m
+}
+
+/// Write the staged `(pos, kind)` pairs out as spans, dropping trivia, 8 at a time.
+///
+/// The scalar form in `common` is paced by its `w` chain: one conditional increment per staged
+/// token, which is also the address every store depends on, so it cannot go faster than a cycle
+/// a token however wide the machine is. Handling eight at a time turns that into one increment
+/// per eight, and the compaction that replaces it is a pair of table lookups.
+pub(super) unsafe fn build_spans(
+    stage_kind: *const u8,
+    stage_pos: *const u32,
+    m: usize,
+    spans: *mut Span,
+    sig_kinds: *mut u8,
+) -> usize {
+    let sp = spans.cast::<u64>();
+    let mut w = 0usize;
+    let mut j = 0usize;
+
+    while j + 8 <= m {
+        // Which of the eight survive: in the trivia range, and not the hashbang.
+        let k8 = vld1_u8(stage_kind.add(j));
+        let triv = vceq_u8(
+            vqsub_u8(vsub_u8(k8, vdup_n_u8(TRIVIA_MIN)), vdup_n_u8(TRIVIA_MAX - TRIVIA_MIN)),
+            vdup_n_u8(0),
+        );
+        let keep = vorr_u8(vmvn_u8(triv), vceq_u8(k8, vdup_n_u8(tk!(Hashbang))));
+        // One bit per token. `ADDV` sums the lanes' bit values, which is the mask.
+        const BITS: [u8; 8] = [1, 2, 4, 8, 16, 32, 64, 128];
+        let sig = usize::from(vaddv_u8(vand_u8(keep, vld1_u8(BITS.as_ptr()))));
+
+        // A token's span runs to the next token's start, so the spans are the overlapping `u32`
+        // pairs of `stage_pos`. Zipping the window against itself shifted by one builds them.
+        if sig == 0xff {
+            // Nothing dropped, so both compactions would be the identity. Minified input stages
+            // almost no trivia - better than 95% of its groups land here - and unminified input
+            // reaches this stage too cheaply for the mispredicts to show.
+            spans8(sp.add(w), stage_pos.add(j));
+            vst1_u8(sig_kinds.add(w), k8);
+            w += 8;
+        } else {
+            let lo4 = sig & 0xf;
+            put4(sp.add(w), stage_pos.add(j), lo4);
+            put4(sp.add(w + lo4.count_ones() as usize), stage_pos.add(j + 4), sig >> 4);
+            // The kinds compact with the same mask, over a window of 8 rather than 4.
+            let kq = vcombine_u8(k8, vdup_n_u8(0));
+            vst1_u8(sig_kinds.add(w), vget_low_u8(vqtbl1q_u8(kq, load_lut(&BCOMPACT[sig]))));
+            w += sig.count_ones() as usize;
+        }
+        j += 8;
+    }
+
+    w + build_spans_scalar(
+        stage_kind.add(j),
+        stage_pos.add(j),
+        m - j,
+        spans.add(w),
+        sig_kinds.add(w),
+    )
+}
+
+/// Write the eight spans starting at `pos` to `dst`, keeping all of them.
+#[inline(always)]
+unsafe fn spans8(dst: *mut u64, pos: *const u32) {
+    for g in 0..2 {
+        let v0 = vld1q_u32(pos.add(g * 4));
+        let v1 = vld1q_u32(pos.add(g * 4 + 1));
+        vst1q_u32(dst.add(g * 4).cast::<u32>(), vzip1q_u32(v0, v1));
+        vst1q_u32(dst.add(g * 4 + 2).cast::<u32>(), vzip2q_u32(v0, v1));
+    }
+}
+
+/// Compact the four spans starting at `pos` by `mask`, writing them at `dst`.
+///
+/// Writes four spans' worth either way; the lanes past `mask`'s population count are zero, and
+/// the next write lands on top of them. That is the same overshoot the AVX2 backend has, and
+/// what the `PAD` on the caller's token buffers covers.
+#[inline(always)]
+unsafe fn put4(dst: *mut u64, pos: *const u32, mask: usize) {
+    let v0 = vld1q_u32(pos);
+    let v1 = vld1q_u32(pos.add(1));
+    let win = uint8x16x2_t(
+        vreinterpretq_u8_u32(vzip1q_u32(v0, v1)),
+        vreinterpretq_u8_u32(vzip2q_u32(v0, v1)),
+    );
+    vst1q_u8(dst.cast::<u8>(), vqtbl2q_u8(win, load_lut(&SPAN_LO[mask])));
+    vst1q_u8(dst.add(2).cast::<u8>(), vqtbl2q_u8(win, load_lut(&SPAN_HI[mask])));
 }
 
 pub(super) unsafe fn lanes_post(
