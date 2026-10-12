@@ -1,11 +1,16 @@
 //! Lookup tables which map single-byte punctuators to their `TokenKind`, using a perfect hash.
 //!
-//! `vpunct1` does the lookup for 32 bytes at once, with 4 `vpshufb`s. For a byte `c`:
+//! Both vector backends do the lookup a whole chunk at a time. For a byte `c`:
 //!
 //! 1. `h = PH_A[c & 15] ^ PH_B[c >> 4]` hashes `c` to one of 32 slots.
 //!    All entries in `PH_A` and `PH_B` are less than 32, so `h` is too.
 //! 2. The kind is `PH_T0[h]` if `h < 16`, and `PH_T1[h - 16]` otherwise.
-//!    The table is split in two because a `vpshufb` lookup can only index 16 entries.
+//!
+//! The table is split in two because a `vpshufb` lookup can only index 16 entries, so the AVX2
+//! backend looks `h` up in both halves and blends on bit 4. AArch64's `TBL` indexes a table of
+//! up to 4 registers, so the NEON backend hands it both halves at once and indexes with `h`
+//! directly - which is why `h` staying under 32 matters there too, as an index of 32 or more
+//! would read as out of range and come back zero rather than wrapping.
 //!
 //! The hash is perfect for the bytes which matter:
 //!

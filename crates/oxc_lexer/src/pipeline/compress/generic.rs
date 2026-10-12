@@ -2,7 +2,7 @@ use oxc_span::Span;
 
 use crate::{
     lanes::Lanes,
-    token::{is_trivia_byte, matches_tk, tk},
+    token::{matches_tk, tk},
 };
 
 use crate::pipeline::chunk::{eqm, load64};
@@ -38,29 +38,6 @@ pub(super) unsafe fn compress_blocks(
         }
     }
     m
-}
-
-/// Contents of this function is in common with AVX2 implementation.
-pub(super) unsafe fn build_spans(
-    stage_kind: *const u8,
-    stage_pos: *const u32,
-    m: usize,
-    spans: *mut Span,
-    sig_kinds: *mut u8,
-) -> usize {
-    let sp = spans.cast::<u64>();
-    let mut w = 0usize;
-    let mut j = 0usize;
-
-    while j < m {
-        let k = *stage_kind.add(j);
-        *sp.add(w) = stage_pos.add(j).cast::<u64>().read_unaligned();
-        *sig_kinds.add(w) = k;
-        w += usize::from(!is_trivia_byte(k) || k == tk!(Hashbang));
-        j += 1;
-    }
-
-    w
 }
 
 pub(super) unsafe fn lanes_post(

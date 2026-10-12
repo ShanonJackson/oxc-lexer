@@ -653,15 +653,21 @@ jobs:
           git diff --exit-code
 
   lexer:
-    # `oxc_lexer` compiles to one of two implementations, chosen at build time:
-    # 1. SIMD core on x86_64 with `avx2` + `bmi2` + `popcnt`.
-    # 2. Scalar fallback everywhere else.
+    # `oxc_lexer` compiles to one of three backends, chosen at build time:
+    # 1. `avx2` on x86_64 with `avx2` + `bmi2` + `popcnt`.
+    # 2. `neon` on aarch64, where NEON is in the baseline so it needs no flags.
+    # 3. `scalar` fallback everywhere else.
     #
-    # None of these features is in the x86_64 baseline on any platform, so the SIMD core is never built
+    # None of the x86_64 features is in that baseline on any platform, so the AVX2 core is never built
     # unless asked for explicitly - which means no other job here lints, tests or runs it.
     #
+    # The `neon` core needs no flags, so "Test Linux ARM64" and "Test Mac" already build and test it.
+    # What it is missing is a conformance leg: these runners are x64, and conformance is the only
+    # check that diffs the backends against each other. Adding one needs an ARM runner and a third
+    # matrix leg with an empty suffix - no new flags.
+    #
     # Both legs regenerate the committed conformance snapshots and fail on any diff,
-    # which ensures the 2 implementations behave identically to each other.
+    # which ensures the backends behave identically to each other.
     #
     # See the LEXER section of `justfile` for the flags.
     name: Lexer (${{ matrix.variant }})
@@ -674,7 +680,7 @@ jobs:
         include:
           - variant: scalar
             suffix: ""
-          - variant: SIMD
+          - variant: avx2
             suffix: "-simd"
     steps:
       - uses: taiki-e/checkout-action@7d1e50e93dc4fb3bba58f85018fadf77898aee8b # v1.4.2
@@ -708,23 +714,23 @@ jobs:
 
       - run: rustup component add clippy
         # No need to run on scalar fallback - linting already covered by "Lint" job
-        if: ${{ steps.filter.outputs.changed == 'true' && matrix.variant == 'SIMD' }}
+        if: ${{ steps.filter.outputs.changed == 'true' && matrix.variant == 'avx2' }}
 
       - name: Lint
         # No need to run on scalar fallback - already covered by "Lint" job
-        if: ${{ steps.filter.outputs.changed == 'true' && matrix.variant == 'SIMD' }}
+        if: ${{ steps.filter.outputs.changed == 'true' && matrix.variant == 'avx2' }}
         run: just lint-lexer-simd
 
       - name: Test
         # No need to run on scalar fallback - already covered by "Test Linux" job
-        if: ${{ steps.filter.outputs.changed == 'true' && matrix.variant == 'SIMD' }}
+        if: ${{ steps.filter.outputs.changed == 'true' && matrix.variant == 'avx2' }}
         run: just test-lexer-simd
 
       - wait: lexer-fixtures
 
       - name: Conformance
-        # Run on both SIMD and scalar fallback - neither is run anywhere else.
-        # The harness prints which implementation it was built with (`oxc_lexer::IS_SIMD`).
+        # Run on both legs - conformance is run nowhere else, for either backend.
+        # The harness prints which backend it was built with (`oxc_lexer::BACKEND`).
         # Checking it here is what guarantees this leg exercised the build it asked for.
         if: steps.filter.outputs.changed == 'true'
         run: |
@@ -735,7 +741,7 @@ jobs:
           git diff --exit-code
 
   lexer-benchmark:
-    # Benchmark `oxc_lexer`'s SIMD core against the lexer in `oxc_parser`, built without the SIMD flags
+    # Benchmark `oxc_lexer`'s AVX2 core against the lexer in `oxc_parser`, built without the SIMD flags
     # (see `lexer` job above).
     #
     # Measures wallclock time, so doesn't use CodSpeed. `oxc_lexer` is designed to exploit out-of-order execution
@@ -769,8 +775,8 @@ jobs:
           tool: just
 
       - name: Benchmark
-        # The `oxc_lexer` benchmark prints which implementation it was built with (`oxc_lexer::IS_SIMD`).
-        # Checking it here is what guarantees this job benchmarked the SIMD core.
+        # The `oxc_lexer` benchmark prints which backend it was built with (`oxc_lexer::BACKEND`).
+        # Checking it here is what guarantees this job benchmarked the AVX2 core.
         # The `oxc_parser` benchmark checks for itself that it was built without the SIMD flags.
         if: steps.filter.outputs.changed == 'true'
         env:
@@ -780,8 +786,8 @@ jobs:
         run: |
           set -o pipefail
           just bench-lexer-simd | tee "$RUNNER_TEMP/bench.log"
-          grep -qxF "Lexer implementation: SIMD" "$RUNNER_TEMP/bench.log" ||
-            { echo "::error::Expected SIMD, but the benchmark reported otherwise"; exit 1; }
+          grep -qxF "Lexer implementation: avx2" "$RUNNER_TEMP/bench.log" ||
+            { echo "::error::Expected avx2, but the benchmark reported otherwise"; exit 1; }
 
   test-codegen:
     name: Test Codegen

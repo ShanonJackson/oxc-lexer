@@ -1,43 +1,16 @@
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-))]
-mod avx2;
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-))]
-use avx2::classify_impl;
+crate::backend! {
+    avx2    { mod avx2;    use avx2::classify_impl; }
+    neon    { mod neon;    use neon::classify_impl; }
+    generic { mod generic; use generic::classify_impl; }
 
-#[cfg(not(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-)))]
-mod generic;
-#[cfg(not(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-)))]
-use generic::classify_impl;
+    // The nibble tables both vector backends look bytes up in. Their own tests check them
+    // against the scalar predicates, so a scalar build still compiles them under `cfg(test)`.
+    simd_or_test { mod luts; mod punct1_luts; }
 
-#[cfg(any(
-    test,
-    not(all(
-        target_arch = "x86_64",
-        target_feature = "avx2",
-        target_feature = "bmi2",
-        target_feature = "popcnt"
-    ))
-))]
-mod punct1;
+    // `PUNCT1` is where the scalar backend reads single-byte punctuator kinds from, and the
+    // oracle `punct1_luts`' test checks the vector backends' perfect hash against.
+    generic_or_test { mod punct1; }
+}
 
 #[inline(never)]
 pub(super) unsafe fn classify(

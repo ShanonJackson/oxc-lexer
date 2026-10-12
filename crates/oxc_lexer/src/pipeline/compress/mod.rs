@@ -5,51 +5,33 @@ use crate::{
     token::{SPAN_SENTINELS, tk},
 };
 
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-))]
-mod avx2;
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-))]
-pub(super) use avx2::init_pair_luts;
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-))]
-use avx2::{build_spans, compress_blocks, lanes_post};
-
-#[cfg(not(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-)))]
-mod generic;
-#[cfg(not(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-)))]
-pub(super) use generic::init_pair_luts;
-#[cfg(not(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-)))]
-use generic::{build_spans, compress_blocks, lanes_post};
-
 mod common;
+
+#[cfg(test)]
+mod tests;
+
+crate::backend! {
+    avx2 {
+        mod avx2;
+        use avx2::{build_spans, compress_blocks, lanes_post};
+    }
+    neon {
+        mod neon;
+        use common::build_spans;
+        use neon::{compress_blocks, lanes_post};
+    }
+    // Both vector backends read token positions out of the same LUTs.
+    simd {
+        mod pair_luts;
+        pub(super) use pair_luts::init_pair_luts;
+    }
+    generic {
+        mod generic;
+        use common::build_spans;
+        use generic::{compress_blocks, lanes_post};
+        pub(super) use generic::init_pair_luts;
+    }
+}
 
 const STAGE_BLOCKS: usize = 32;
 pub const STAGE_CAP: usize = STAGE_BLOCKS * 64 + 128;

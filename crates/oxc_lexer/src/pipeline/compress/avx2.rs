@@ -4,17 +4,13 @@ use oxc_span::Span;
 
 use crate::{
     lanes::Lanes,
-    token::{TRIVIA_MAX, TRIVIA_MIN, is_trivia_byte, tk},
+    token::{TRIVIA_MAX, TRIVIA_MIN, tk},
 };
 
-use super::common::{emit_value, invalid_diags};
-
-mod pair_luts;
-use pair_luts::get_pair_luts;
-pub use pair_luts::init_pair_luts;
-
-#[cfg(test)]
-mod tests;
+use super::{
+    common::{build_spans as build_spans_scalar, emit_value, invalid_diags},
+    pair_luts::get_pair_luts,
+};
 
 static QCOMPACT: [[u32; 8]; 16] = qcompact();
 static BCOMPACT: [[u8; 16]; 256] = bcompact();
@@ -163,16 +159,13 @@ pub(super) unsafe fn build_spans(
         j += 8;
     }
 
-    // Same code as generic implementation
-    while j < m {
-        let k = *stage_kind.add(j);
-        *sp.add(w) = stage_pos.add(j).cast::<u64>().read_unaligned();
-        *sig_kinds.add(w) = k;
-        w += usize::from(!is_trivia_byte(k) || k == tk!(Hashbang));
-        j += 1;
-    }
-
-    w
+    w + build_spans_scalar(
+        stage_kind.add(j),
+        stage_pos.add(j),
+        m - j,
+        spans.add(w),
+        sig_kinds.add(w),
+    )
 }
 
 pub(super) unsafe fn lanes_post(

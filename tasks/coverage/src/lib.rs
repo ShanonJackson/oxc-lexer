@@ -371,8 +371,8 @@ impl AppArgs {
     ///
     /// Compare `oxc_lexer`'s token spans against the parser's token stream over the corpora.
     /// Opt-in (kept out of `run_all`) — requires `lexer` Cargo feature.
-    /// Runs against whichever of the lexer's two implementations the build selects -
-    /// the SIMD core on a static AVX2/BMI2/POPCNT x86_64 build, the scalar fallback otherwise.
+    /// Runs against whichever of the lexer's three backends the build selects - `avx2` on a static
+    /// AVX2/BMI2/POPCNT x86_64 build, `neon` on aarch64, the scalar fallback otherwise.
     /// `oxc_lexer` only supports little endian at present.
     ///
     /// # Panics
@@ -380,10 +380,9 @@ impl AppArgs {
     pub fn run_lexer(&self, data: &TestData) {
         #[cfg(all(feature = "lexer", target_endian = "little"))]
         {
-            // Report which implementation was built.
+            // Report which backend was built.
             // CI checks this line to make sure the build it expected is the build it got.
-            let implementation = if oxc_lexer::IS_SIMD { "SIMD" } else { "scalar" };
-            println!("Lexer implementation: {implementation}");
+            println!("Lexer implementation: {}", oxc_lexer::BACKEND);
 
             self.run_tool(
                 "lexer_test262",

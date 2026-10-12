@@ -1,6 +1,38 @@
 use oxc_span::Span;
 
-use crate::{error::DiagCode, lanes::Lanes, token::tk};
+use crate::{
+    error::DiagCode,
+    lanes::Lanes,
+    token::{is_trivia_byte, tk},
+};
+
+/// Write the staged `(pos, kind)` pairs out as spans, dropping trivia.
+///
+/// A token's span runs to the next token's start, so the staged positions are read as overlapping
+/// pairs - which is why there is always one more position staged than there are tokens to emit.
+///
+/// This is the scalar form, used as-is by the NEON and scalar backends and as the AVX2 backend's
+/// tail. Vectorizing it means compacting at `Span` granularity, which AVX2 gets from a single
+/// `vpermd`; on AArch64 the equivalent is a `TBL` over a 4-register table and a control LUT per
+/// mask, which has not yet earned its keep against how cheap this loop already is.
+#[inline(always)]
+pub(super) unsafe fn build_spans(
+    stage_kind: *const u8,
+    stage_pos: *const u32,
+    m: usize,
+    spans: *mut Span,
+    sig_kinds: *mut u8,
+) -> usize {
+    let sp = spans.cast::<u64>();
+    let mut w = 0usize;
+    for j in 0..m {
+        let k = *stage_kind.add(j);
+        *sp.add(w) = stage_pos.add(j).cast::<u64>().read_unaligned();
+        *sig_kinds.add(w) = k;
+        w += usize::from(!is_trivia_byte(k) || k == tk!(Hashbang));
+    }
+    w
+}
 
 #[inline(always)]
 pub(super) unsafe fn emit_value(

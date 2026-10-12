@@ -1,46 +1,20 @@
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-))]
-mod avx2;
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-))]
-use avx2::define_find_function;
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-))]
-pub(super) use avx2::{bracket_bits, find1, find2, find3, find4};
-
-#[cfg(not(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-)))]
-mod generic;
-#[cfg(not(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-)))]
-use generic::define_find_function;
-#[cfg(not(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-)))]
-pub(super) use generic::{bracket_bits, find1, find2, find3, find4};
+crate::backend! {
+    avx2 {
+        mod avx2;
+        use avx2::define_find_function;
+        pub(super) use avx2::{bracket_bits, find1, find2, find3, find4};
+    }
+    neon {
+        mod neon;
+        use neon::define_find_function;
+        pub(super) use neon::{bracket_bits, find1, find2, find3, find4};
+    }
+    generic {
+        mod generic;
+        use generic::define_find_function;
+        pub(super) use generic::{bracket_bits, find1, find2, find3, find4};
+    }
+}
 
 mod common;
 pub(super) use common::{

@@ -7,6 +7,7 @@ use oxc_span::Span;
 use oxc_syntax::identifier::{is_identifier_part, is_identifier_start};
 
 pub mod arena;
+mod backend;
 mod comment_meta;
 #[cfg(feature = "oxc_diagnostics")]
 pub mod diagnostics;
@@ -17,6 +18,9 @@ mod pipeline;
 pub mod token;
 
 pub use arena::{Arena, LexResult, LineEntry};
+pub use backend::{BACKEND, IS_SIMD};
+// Re-exported at the crate root so the stages can write `crate::backend! { .. }`.
+pub(crate) use backend::backend;
 pub use error::{DiagCode, DiagSeverity, Diagnostic};
 pub use lanes::Lanes;
 pub use options::LexOptions;
@@ -24,15 +28,6 @@ pub use pipeline::Lexer;
 pub use token::{KW_KIND_BASE, TRIVIA_MAX, TRIVIA_MIN, TokenKind, token_flags};
 
 pub const PAD: usize = 64;
-
-/// `true` if the SIMD core is compiled in, `false` if the scalar fallback is.
-/// Used by CI to ensure it's testing the implementation it thinks it is.
-pub const IS_SIMD: bool = cfg!(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-));
 
 thread_local! {
     static SCRATCH: RefCell<Lexer> = RefCell::new(Lexer::new());
