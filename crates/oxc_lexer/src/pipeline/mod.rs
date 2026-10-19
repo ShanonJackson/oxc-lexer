@@ -36,7 +36,7 @@ use carve::carve;
 use classify::classify;
 use coalesce::{KWB, coalesce};
 use compress::{STAGE_CAP, compress, write_sentinels};
-use cpu::{Cpu, DynCpu, apply, cpu_versions};
+use cpu::{Cpu, DynCpu, cpu_select};
 use misc::{misc_post, misc_pre};
 
 pub struct Lexer {
@@ -144,10 +144,20 @@ impl Lexer {
         module: bool,
         vutf8: bool,
     ) -> usize {
-        self.lex_raw_impl(src, n, out_kinds, out_spans, jsx, ts, module, vutf8, self.cpu)
+        cpu_select!(self.cpu, {
+            Avx2(cpu) => {
+                self.lex_raw_impl(src, n, out_kinds, out_spans, jsx, ts, module, vutf8, cpu)
+            },
+            Neon(cpu) => {
+                self.lex_raw_impl(src, n, out_kinds, out_spans, jsx, ts, module, vutf8, cpu)
+            },
+            Generic(cpu) => {
+                self.lex_raw_impl(src, n, out_kinds, out_spans, jsx, ts, module, vutf8, cpu)
+            },
+        })
     }
 
-    #[apply(cpu_versions)]
+    // One copy per feature set, so classify and compress resolve at compile time inside each.
     unsafe fn lex_raw_impl(
         &mut self,
         src: &[u8],

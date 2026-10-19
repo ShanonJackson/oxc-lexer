@@ -5,7 +5,7 @@ use crate::{
     token::{SPAN_SENTINELS, tk},
 };
 
-use crate::pipeline::cpu::{Cpu, DynCpu, apply, cpu_select, cpu_versions};
+use crate::pipeline::cpu::{Cpu, DynCpu, cpu_select};
 
 #[cfg(target_arch = "x86_64")]
 mod avx2;
@@ -20,7 +20,6 @@ mod common;
 const STAGE_BLOCKS: usize = 32;
 pub const STAGE_CAP: usize = STAGE_BLOCKS * 64 + 128;
 
-#[apply(cpu_versions)]
 #[inline(never)]
 pub unsafe fn compress(
     src: &[u8],
@@ -74,8 +73,8 @@ pub unsafe fn write_sentinels(n: u32, spans: *mut Span, sig_kinds: *mut u8) {
 pub(super) fn init_pair_luts(cpu: DynCpu) {
     cpu_select!(cpu, {
         Avx2(cpu) => init_pair_luts_avx2(cpu),
-        Neon(_) => {}
-        Generic(_) => {}
+        Neon(_) => (),
+        Generic(_) => (),
     });
 }
 

@@ -8,7 +8,6 @@
 //!
 //! Code which has SIMD implementations takes a type implementing [`Cpu`],
 //! and uses [`cpu_select!`] to pick an implementation.
-//! [`cpu_versions!`] turns a function into one with a separate entry point for each CPU feature set.
 //!
 //! * Given a specific type (e.g. `Avx2`): the choice is made at compile time.
 //! * Given a [`DynCpu`]: the choice is made at runtime.
@@ -40,11 +39,23 @@
 //!
 //! DO NOT add any other way to create these types (e.g. a `Default` impl or a public constructor).
 
-mod select_macro;
-mod versions_macro;
-
-pub(super) use select_macro::cpu_select;
-pub(super) use versions_macro::{__cpu_versions, apply, cpu_versions};
+/// Pick an implementation per CPU feature set; with a concrete type the match folds to one arm.
+macro_rules! cpu_select {
+    ($cpu:expr, {
+        Avx2($avx2:pat) => $avx2_body:expr,
+        Neon($neon:pat) => $neon_body:expr,
+        Generic($generic:pat) => $generic_body:expr $(,)?
+    }) => {
+        match crate::pipeline::cpu::Cpu::to_dyn($cpu) {
+            #[cfg(target_arch = "x86_64")]
+            crate::pipeline::cpu::DynCpu::Avx2($avx2) => $avx2_body,
+            #[cfg(target_arch = "aarch64")]
+            crate::pipeline::cpu::DynCpu::Neon($neon) => $neon_body,
+            crate::pipeline::cpu::DynCpu::Generic($generic) => $generic_body,
+        }
+    };
+}
+pub(super) use cpu_select;
 
 /// Trait for types representing a CPU feature set.
 ///
