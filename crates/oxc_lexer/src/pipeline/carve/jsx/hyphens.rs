@@ -1,12 +1,7 @@
 use crate::pipeline::bitmap::{bm_clear, bm_get};
 
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-))]
-use crate::pipeline::chunk::{load256, mm, veq};
+#[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
+use crate::pipeline::chunk::{load128, mm128, veq128};
 
 /// JSXIdentifier admits `-`, so `data-x` and `aria-label` are one name token
 /// where JS would read three. Fuse every hyphen in `[a, b)` into the run
@@ -16,12 +11,7 @@ use crate::pipeline::chunk::{load256, mm, veq};
 /// The caller only ever passes name/attribute regions: strings and `{}`
 /// containers are consumed whole before the next region begins, so a hyphen
 /// reached here is never a minus.
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-))]
+#[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
 #[inline(always)]
 pub(super) unsafe fn jsx_glue_hyphens(
     src: *const u8,
@@ -35,9 +25,9 @@ pub(super) unsafe fn jsx_glue_hyphens(
     let mut i = a;
     let mut last = usize::MAX;
     while i < b {
-        let mut m = mm(veq(load256(src, i), b'-'));
+        let mut m = mm128(veq128(load128(src, i), b'-'));
         let rem = b - i;
-        if rem < 32 {
+        if rem < 16 {
             m &= (1u32 << rem) - 1;
         }
         while m != 0 {
@@ -45,16 +35,11 @@ pub(super) unsafe fn jsx_glue_hyphens(
             m &= m - 1;
             glue_hyphen_at(n, st, opch, word, h, &mut last);
         }
-        i += 32;
+        i += 16;
     }
 }
 
-#[cfg(not(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-)))]
+#[cfg(not(all(target_arch = "x86_64", target_feature = "sse2")))]
 #[inline(always)]
 pub(super) unsafe fn jsx_glue_hyphens(
     src: *const u8,

@@ -478,12 +478,7 @@ pub(super) unsafe fn kw_match<const IS_TS: bool>(ptr: *const u8, len: usize) -> 
 /// # SAFETY
 ///
 /// `ptr` must be valid for reading 16 bytes, and `len` must be between 0 and 16 (inclusive).
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-))]
+#[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
 #[inline(always)]
 unsafe fn text_matches(ptr: *const u8, len: usize, text: &[u64; 2]) -> bool {
     use std::arch::x86_64::{_mm_and_si128, _mm_cmpeq_epi8, _mm_loadu_si128, _mm_movemask_epi8};
@@ -521,12 +516,7 @@ unsafe fn text_matches(ptr: *const u8, len: usize, text: &[u64; 2]) -> bool {
 ///
 /// `ptr` must be valid for reading 16 bytes, and `len` must be between 0 and 16 (inclusive).
 #[cfg(not(any(
-    all(
-        target_arch = "x86_64",
-        target_feature = "avx2",
-        target_feature = "bmi2",
-        target_feature = "popcnt"
-    ),
+    all(target_arch = "x86_64", target_feature = "sse2"),
     all(target_arch = "aarch64", target_feature = "neon")
 )))]
 #[inline(always)]

@@ -5,12 +5,7 @@
 
 use std::{ptr, str};
 
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-))]
+#[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
 use std::arch::x86_64::*;
 
 use oxc_ast::ast::{Comment, CommentKind, RegExpFlags};
@@ -500,12 +495,7 @@ static KEEP: [u64; 9] = [
     0xffff_ffff_ffff_ffff,
 ];
 
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-))]
+#[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
 #[inline]
 fn cook_short<const EMIT: bool, const CRLF: bool>(
     src: &[u8],
@@ -516,27 +506,37 @@ fn cook_short<const EMIT: bool, const CRLF: bool>(
     body_len: usize,
     diags: &mut Vec<Diagnostic>,
 ) -> (u32, bool, bool) {
-    let v = unsafe { _mm256_loadu_si256(src.as_ptr().add(bs as usize) as *const __m256i) };
-    let mut hit = unsafe { _mm256_cmpeq_epi8(v, _mm256_set1_epi8(b'\\' as i8)) };
-    if CRLF {
-        // Templates also decode when a raw CR needs LF-normalizing.
-        hit = unsafe { _mm256_or_si256(hit, _mm256_cmpeq_epi8(v, _mm256_set1_epi8(b'\r' as i8))) };
-    }
-    let bs_mask = unsafe { _mm256_movemask_epi8(hit) as u32 } & ((1u32 << body_len) - 1);
+    let p = unsafe { src.as_ptr().add(bs as usize) };
+    let v0 = unsafe { _mm_loadu_si128(p as *const __m128i) };
+    let v1 = unsafe { _mm_loadu_si128(p.add(16) as *const __m128i) };
+    let bs_mask =
+        (short_hits::<CRLF>(v0) | (short_hits::<CRLF>(v1) << 16)) & ((1u32 << body_len) - 1);
     if bs_mask == 0 {
-        unsafe { _mm256_storeu_si256(base.add(ss as usize) as *mut __m256i, v) };
+        unsafe {
+            _mm_storeu_si128(base.add(ss as usize) as *mut __m128i, v0);
+            _mm_storeu_si128(base.add(ss as usize + 16) as *mut __m128i, v1);
+        }
         (ss + (be - bs), false, false)
     } else {
         unsafe { cook_decode::<EMIT, CRLF>(src.as_ptr(), bs, be, base, ss, diags) }
     }
 }
 
-#[cfg(not(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-)))]
+#[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
+#[inline(always)]
+fn short_hits<const CRLF: bool>(v: __m128i) -> u32 {
+    // SAFETY: These intrinsics touch no memory, and SSE2 is in the x86_64 baseline.
+    unsafe {
+        let mut hit = _mm_cmpeq_epi8(v, _mm_set1_epi8(b'\\' as i8));
+        if CRLF {
+            // Templates also decode when a raw CR needs LF-normalizing.
+            hit = _mm_or_si128(hit, _mm_cmpeq_epi8(v, _mm_set1_epi8(b'\r' as i8)));
+        }
+        _mm_movemask_epi8(hit) as u32
+    }
+}
+
+#[cfg(not(all(target_arch = "x86_64", target_feature = "sse2")))]
 #[inline]
 fn cook_short<const EMIT: bool, const CRLF: bool>(
     src: &[u8],
@@ -567,23 +567,17 @@ fn cook_short<const EMIT: bool, const CRLF: bool>(
     }
 }
 
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-))]
+#[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
 #[inline]
 fn span_has_bs(src: &[u8], bs: usize, be: usize) -> bool {
     let mut i = bs;
-    while i + 32 <= be {
-        let v = unsafe { _mm256_loadu_si256(src.as_ptr().add(i) as *const __m256i) };
-        let m =
-            unsafe { _mm256_movemask_epi8(_mm256_cmpeq_epi8(v, _mm256_set1_epi8(b'\\' as i8))) };
+    while i + 16 <= be {
+        let v = unsafe { _mm_loadu_si128(src.as_ptr().add(i) as *const __m128i) };
+        let m = unsafe { _mm_movemask_epi8(_mm_cmpeq_epi8(v, _mm_set1_epi8(b'\\' as i8))) };
         if m != 0 {
             return true;
         }
-        i += 32;
+        i += 16;
     }
     while i < be {
         if src[i] == b'\\' {
@@ -594,39 +588,29 @@ fn span_has_bs(src: &[u8], bs: usize, be: usize) -> bool {
     false
 }
 
-#[cfg(not(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-)))]
+#[cfg(not(all(target_arch = "x86_64", target_feature = "sse2")))]
 #[inline]
 fn span_has_bs(src: &[u8], bs: usize, be: usize) -> bool {
     memchr::memchr(b'\\', &src[bs..be]).is_some()
 }
 
 /// Template variant of [`span_has_bs`]: a raw CR also forces the decode path.
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-))]
+#[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
 #[inline]
 fn span_has_bs_or_cr(src: &[u8], bs: usize, be: usize) -> bool {
     let mut i = bs;
-    while i + 32 <= be {
-        let v = unsafe { _mm256_loadu_si256(src.as_ptr().add(i) as *const __m256i) };
+    while i + 16 <= be {
+        let v = unsafe { _mm_loadu_si128(src.as_ptr().add(i) as *const __m128i) };
         let m = unsafe {
-            _mm256_movemask_epi8(_mm256_or_si256(
-                _mm256_cmpeq_epi8(v, _mm256_set1_epi8(b'\\' as i8)),
-                _mm256_cmpeq_epi8(v, _mm256_set1_epi8(b'\r' as i8)),
+            _mm_movemask_epi8(_mm_or_si128(
+                _mm_cmpeq_epi8(v, _mm_set1_epi8(b'\\' as i8)),
+                _mm_cmpeq_epi8(v, _mm_set1_epi8(b'\r' as i8)),
             ))
         };
         if m != 0 {
             return true;
         }
-        i += 32;
+        i += 16;
     }
     while i < be {
         if src[i] == b'\\' || src[i] == b'\r' {
@@ -637,12 +621,7 @@ fn span_has_bs_or_cr(src: &[u8], bs: usize, be: usize) -> bool {
     false
 }
 
-#[cfg(not(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-)))]
+#[cfg(not(all(target_arch = "x86_64", target_feature = "sse2")))]
 #[inline]
 fn span_has_bs_or_cr(src: &[u8], bs: usize, be: usize) -> bool {
     memchr::memchr2(b'\\', b'\r', &src[bs..be]).is_some()
