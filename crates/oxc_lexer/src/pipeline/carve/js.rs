@@ -2,7 +2,7 @@ use crate::{lanes::Lanes, token::tk};
 
 use crate::pipeline::{
     bitmap::{bm_clear_range, bm_set},
-    find::{find_line_terminator, find_opener, find_opener6},
+    find::{OPENER, OPENER6, find, find_line_terminator},
 };
 
 use super::common::{
@@ -35,7 +35,7 @@ pub(super) unsafe fn carve_js(
     }
     loop {
         let nsub = depth.len();
-        let s = if nsub != 0 { find_opener6(src, n, i) } else { find_opener(src, n, i) };
+        let s = if nsub != 0 { find(src, n, i, OPENER6) } else { find(src, n, i, OPENER) };
         if s >= n {
             break;
         }
