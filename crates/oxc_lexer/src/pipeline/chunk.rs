@@ -46,6 +46,35 @@ mod primitives_avx2 {
 #[cfg(target_arch = "x86_64")]
 pub(super) use primitives_avx2::*;
 
+// SSE2 is in the x86_64 baseline, so these need no feature check and inline into any caller.
+#[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
+mod primitives_sse2 {
+    use std::arch::x86_64::*;
+
+    /// Caller must ensure src.add(i) is valid for reads of 16 bytes.
+    #[inline(always)]
+    pub unsafe fn load128(src: *const u8, i: usize) -> __m128i {
+        _mm_loadu_si128(src.add(i) as *const __m128i)
+    }
+
+    /// 16-lane counterpart of veq.
+    #[inline(always)]
+    pub unsafe fn veq128(v: __m128i, c: u8) -> __m128i {
+        // SAFETY: These intrinsics touch no memory, and SSE2 is in the x86_64 baseline.
+        unsafe { _mm_cmpeq_epi8(v, _mm_set1_epi8(c as i8)) }
+    }
+
+    /// 16-lane counterpart of mm: bit N of the result is the top bit of byte N in v.
+    #[inline(always)]
+    pub unsafe fn mm128(v: __m128i) -> u32 {
+        // SAFETY: This intrinsic touches no memory, and SSE2 is in the x86_64 baseline.
+        unsafe { _mm_movemask_epi8(v) as u32 }
+    }
+}
+
+#[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
+pub(super) use primitives_sse2::*;
+
 mod primitives_generic {
     use std::ptr;
 

@@ -1,22 +1,22 @@
 use std::arch::x86_64::*;
 
-use crate::pipeline::chunk::{load256, mm, veq};
+use crate::pipeline::chunk::{load128, mm128, veq128};
 
 use super::common::lic_verify_at;
 
-pub unsafe fn scan_block_comment_avx2(
+pub unsafe fn scan_block_comment_sse2(
     src: *const u8,
     n: usize,
     mut i: usize,
 ) -> (usize, bool, i64) {
     let mut saw_nl = false;
     let mut lic_q: i64 = -1;
-    while i + 32 <= n {
-        let v = load256(src, i);
-        let vn = load256(src, i + 1);
-        let term = mm(_mm256_and_si256(veq(v, b'*'), veq(vn, b'/')));
-        let nl = if saw_nl { 0 } else { mm(_mm256_or_si256(veq(v, b'\n'), veq(v, b'\r'))) };
-        let at = if lic_q < 0 { mm(veq(v, b'@')) } else { 0 };
+    while i + 16 <= n {
+        let v = load128(src, i);
+        let vn = load128(src, i + 1);
+        let term = mm128(_mm_and_si128(veq128(v, b'*'), veq128(vn, b'/')));
+        let nl = if saw_nl { 0 } else { mm128(_mm_or_si128(veq128(v, b'\n'), veq128(v, b'\r'))) };
+        let at = if lic_q < 0 { mm128(veq128(v, b'@')) } else { 0 };
         if term != 0 {
             let j = term.trailing_zeros() as usize;
             let bodymask: u32 = if j > 0 { (1u32 << j) - 1 } else { 0 };
@@ -33,7 +33,7 @@ pub unsafe fn scan_block_comment_avx2(
         if lic_q < 0 && at != 0 {
             lic_q = lic_first(src, i, at);
         }
-        i += 32;
+        i += 16;
     }
     while i + 1 < n {
         let c = *src.add(i);
@@ -56,13 +56,14 @@ pub unsafe fn scan_block_comment_avx2(
 /// metadata. A 0xE2 that isn't LS/PS (typographic punctuation in prose) is
 /// cleared from the mask and the scan continues; the LS/PS confirm can read
 /// the pad, which never matches 0x80.
-pub unsafe fn scan_line_comment_avx2(src: *const u8, n: usize, mut i: usize) -> (usize, i64) {
+pub unsafe fn scan_line_comment_sse2(src: *const u8, n: usize, mut i: usize) -> (usize, i64) {
     let mut lic_q: i64 = -1;
-    while i + 32 <= n {
-        let v = load256(src, i);
-        let term_v = _mm256_or_si256(_mm256_or_si256(veq(v, b'\n'), veq(v, b'\r')), veq(v, 0xE2));
-        let mut term = mm(term_v);
-        let at = mm(veq(v, b'@'));
+    while i + 16 <= n {
+        let v = load128(src, i);
+        let term_v =
+            _mm_or_si128(_mm_or_si128(veq128(v, b'\n'), veq128(v, b'\r')), veq128(v, 0xE2));
+        let mut term = mm128(term_v);
+        let at = mm128(veq128(v, b'@'));
         while term != 0 {
             let t = term.trailing_zeros() as usize;
             let c = *src.add(i + t);
@@ -84,7 +85,7 @@ pub unsafe fn scan_line_comment_avx2(src: *const u8, n: usize, mut i: usize) -> 
         if lic_q < 0 && at != 0 {
             lic_q = lic_first(src, i, at);
         }
-        i += 32;
+        i += 16;
     }
     while i < n {
         let c = *src.add(i);

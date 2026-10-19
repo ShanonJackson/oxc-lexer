@@ -1,33 +1,13 @@
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-))]
-mod avx2;
-#[cfg(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-))]
-pub(super) use avx2::{
-    scan_block_comment_avx2 as scan_block_comment, scan_line_comment_avx2 as scan_line_comment,
+#[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
+mod sse2;
+#[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
+pub(super) use sse2::{
+    scan_block_comment_sse2 as scan_block_comment, scan_line_comment_sse2 as scan_line_comment,
 };
 
-#[cfg(not(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-)))]
+#[cfg(not(all(target_arch = "x86_64", target_feature = "sse2")))]
 mod generic;
-#[cfg(not(all(
-    target_arch = "x86_64",
-    target_feature = "avx2",
-    target_feature = "bmi2",
-    target_feature = "popcnt"
-)))]
+#[cfg(not(all(target_arch = "x86_64", target_feature = "sse2")))]
 pub(super) use generic::{
     scan_block_comment_generic as scan_block_comment,
     scan_line_comment_generic as scan_line_comment,
