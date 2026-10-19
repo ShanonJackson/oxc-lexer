@@ -371,7 +371,7 @@ impl AppArgs {
     ///
     /// Compare `oxc_lexer`'s token spans against the parser's token stream over the corpora.
     /// Opt-in (kept out of `run_all`) — requires `lexer` Cargo feature.
-    /// Runs against whichever of the lexer's implementations the build selects (see `oxc_lexer::IMPLEMENTATION`).
+    /// Runs against whichever of the lexer's implementations the machine supports (see oxc_lexer::implementation).
     /// `oxc_lexer` only supports little endian at present.
     ///
     /// # Panics
@@ -381,7 +381,7 @@ impl AppArgs {
         {
             // Report which implementation was built.
             // CI checks this line to make sure the build it expected is the build it got.
-            println!("Lexer implementation: {}", oxc_lexer::IMPLEMENTATION);
+            println!("Lexer implementation: {}", oxc_lexer::implementation());
 
             self.run_tool(
                 "lexer_test262",

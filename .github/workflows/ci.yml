@@ -653,19 +653,19 @@ jobs:
           git diff --exit-code
 
   lexer:
-    # `oxc_lexer` compiles to one of 3 implementations, chosen at build time:
-    # 1. AVX2 on x86_64 with `avx2` + `bmi2` + `popcnt`.
+    # `oxc_lexer` has 3 implementations:
+    # 1. AVX2 on x86_64, when the CPU supports `avx2` + `bmi2` + `popcnt` (detected at runtime).
     # 2. Neon on aarch64.
-    # 3. Generic everywhere else.
+    # 3. Generic everywhere else, and on x86_64 when built with the `force_generic` feature.
     #
-    # Each leg of this job builds one of them. The AVX2 and generic legs run on x86_64, the Neon leg on aarch64.
+    # Each leg of this job runs one of them. The AVX2 and generic legs run on x86_64, the Neon leg on aarch64.
     #
     # Coverage by other jobs:
-    # - None of `avx2`, `bmi2` and `popcnt` is in the x86_64 baseline on any platform, so the AVX2 implementation
-    #   is never built unless asked for explicitly - which means no other job here lints, tests or runs it.
+    # - The x86_64 runners support AVX2, so the "Lint" and "Test Linux" jobs already cover the AVX2 implementation.
+    #   The AVX2 leg also builds with those features enabled globally, which no other job does.
     # - No other job builds Neon on PRs (the aarch64 test jobs only run on `main`), and no other job lints it.
-    # - Generic is already linted by the "Lint" job and tested by the "Test Linux" job,
-    #   so this job only runs conformance for it.
+    # - Generic is linted by the "Lint" job (all of the lexer's code is compiled on every x86_64 build),
+    #   but never runs anywhere else on x86_64, so this job tests it and runs conformance for it.
     #
     # All legs regenerate the committed conformance snapshots and fail on any diff,
     # which ensures the 3 implementations behave identically to each other.
@@ -681,7 +681,7 @@ jobs:
         include:
           - variant: generic
             runner: namespace-profile-linux-x64-default
-            suffix: ""
+            suffix: "-generic"
           - variant: AVX2
             runner: namespace-profile-linux-x64-default
             suffix: "-avx2"
@@ -739,15 +739,14 @@ jobs:
         run: just lint-lexer${{ matrix.suffix }}
 
       - name: Test
-        # No need to run on generic - already covered by "Test Linux" job
-        if: ${{ steps.filter.outputs.changed == 'true' && matrix.variant != 'generic' }}
+        if: steps.filter.outputs.changed == 'true'
         run: just test-lexer${{ matrix.suffix }}
 
       - wait: lexer-fixtures
 
       - name: Conformance
         # Run on all 3 implementations - none of them is run anywhere else.
-        # The harness prints which implementation it was built with (`oxc_lexer::IMPLEMENTATION`).
+        # The harness prints which implementation it was built with (`oxc_lexer::implementation()`).
         # Checking it here is what guarantees this leg exercised the build it asked for.
         if: steps.filter.outputs.changed == 'true'
         run: |
@@ -792,7 +791,7 @@ jobs:
           tool: just
 
       - name: Benchmark
-        # The `oxc_lexer` benchmark prints which implementation it was built with (`oxc_lexer::IMPLEMENTATION`).
+        # The `oxc_lexer` benchmark prints which implementation it was built with (`oxc_lexer::implementation()`).
         # Checking it here is what guarantees this job benchmarked the AVX2 implementation.
         # `just bench-lexer-avx2` builds the `oxc_parser` benchmark without the AVX2 flags (not checked here).
         if: steps.filter.outputs.changed == 'true'

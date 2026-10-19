@@ -101,6 +101,17 @@ impl Cpu for DynCpu {
 
 impl Sealed for DynCpu {}
 
+impl DynCpu {
+    /// Name of the feature set, for CI and benchmark logs.
+    pub fn name(self) -> &'static str {
+        cpu_select!(self, {
+            Avx2(_) => "AVX2",
+            Neon(_) => "Neon",
+            Generic(_) => "generic",
+        })
+    }
+}
+
 /// Generic implementation.
 mod generic {
     use super::*;
@@ -173,16 +184,11 @@ mod x86_64 {
     impl DynCpu {
         /// Detect CPU feature set for x86_64 platform.
         pub fn detect() -> Self {
-            // Currently a compile-time check. Later on will be replaced by runtime detection.
-            if cfg!(all(
-                target_feature = "avx2",
-                target_feature = "bmi2",
-                target_feature = "popcnt"
-            )) {
-                Avx2(()).to_dyn()
-            } else {
-                DynCpu::generic()
-            }
+            let avx2 = !cfg!(feature = "force_generic")
+                && is_x86_feature_detected!("avx2")
+                && is_x86_feature_detected!("bmi2")
+                && is_x86_feature_detected!("popcnt");
+            if avx2 { Avx2(()).to_dyn() } else { DynCpu::generic() }
         }
     }
 }

@@ -32,3 +32,5 @@ oxc_diagnostics = { workspace = true, optional = true }
 
 [features]
 oxc_diagnostics = ["dep:oxc_diagnostics"]
+# Skip feature detection on x86_64 and use the generic implementation, so it can be tested on any machine.
+force_generic = []

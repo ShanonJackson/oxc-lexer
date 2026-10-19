@@ -260,6 +260,11 @@ impl Default for Lexer {
     }
 }
 
+/// Name of the implementation that runs on this machine, for CI and benchmark logs.
+pub fn implementation() -> &'static str {
+    DynCpu::detect().name()
+}
+
 /// The lex in progress as `disambiguate` reads it, over the buffers [`Lexer::ensure`] sized.
 ///
 /// # SAFETY

@@ -149,9 +149,9 @@ ast:
 
 # ==================== LEXER ====================
 
-# `oxc_lexer` compiles to one of 3 implementations, chosen at build time:
+# `oxc_lexer` has 3 implementations:
 #
-# * AVX2, on x86_64 with `avx2` + `bmi2` + `popcnt` enabled
+# * AVX2, on x86_64 when the CPU supports `avx2` + `bmi2` + `popcnt` (detected at runtime)
 # * Neon, on aarch64 (every aarch64 target with `std` enables `neon`)
 # * Generic, everywhere else
 #
@@ -160,14 +160,12 @@ ast:
 #
 # Each task has 3 recipes:
 #
-# * `*-lexer` builds for the host - Neon on an ARM host, generic on an x86_64 host.
-# * `*-lexer-avx2` builds the AVX2 implementation for x86_64.
-# * `*-lexer-generic` builds the generic implementation for x86_64.
-#   On an x86_64 host, that's the same as `*-lexer`.
+# * `*-lexer` builds for the host - Neon on an ARM host, whichever the CPU supports on an x86_64 host.
+# * `*-lexer-avx2` builds for x86_64 with `avx2` + `bmi2` + `popcnt` enabled globally, so detection
+#   resolves to AVX2 at compile time and the whole crate is compiled with those features on.
+# * `*-lexer-generic` builds for x86_64 with the `force_generic` feature, which skips detection.
 #
-# None of `avx2`, `bmi2` and `popcnt` is in the x86_64 baseline on any platform, so reaching the AVX2 implementation
-# always means asking for them explicitly - even on an x86_64 host.
-# The flags live in `.cargo/lexer-avx2.toml`, passed with `cargo --config`, which avoids shell quoting entirely
+# The AVX2 flags live in `.cargo/lexer-avx2.toml`, passed with `cargo --config`, which avoids shell quoting entirely
 # (this justfile runs PowerShell on Windows).
 #
 # `--target` is always passed for the x86_64 builds, so that the flags land on the triple the config file names.
@@ -178,8 +176,9 @@ ast:
 #
 # On ARM Linux or ARM Windows they will fail, loudly, when linking or running.
 _lexer-x86-target := if os() == "macos" { "x86_64-apple-darwin" } else if os() == "windows" { "x86_64-pc-windows-msvc" } else { "x86_64-unknown-linux-gnu" }
-_lexer-generic := "--target " + _lexer-x86-target
-_lexer-avx2 := _lexer-generic + " --config .cargo/lexer-avx2.toml"
+_lexer-x86 := "--target " + _lexer-x86-target
+_lexer-generic := _lexer-x86 + " --features oxc_lexer/force_generic"
+_lexer-avx2 := _lexer-x86 + " --config .cargo/lexer-avx2.toml"
 
 # Run `oxc_lexer`'s tests, built for the host
 test-lexer *args='':
