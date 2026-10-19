@@ -7,7 +7,7 @@ use crate::pipeline::{
     scan::scan_ident_esc,
 };
 
-#[inline(never)]
+#[inline(always)]
 pub unsafe fn misc_pre(
     src: *const u8,
     n: usize,

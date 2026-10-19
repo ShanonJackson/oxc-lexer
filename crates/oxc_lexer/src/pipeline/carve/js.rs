@@ -10,6 +10,7 @@ use super::common::{
     lex_slash, lex_string, lex_template_segment, skip_unicode_brace_escape,
 };
 
+#[inline(always)]
 pub(super) unsafe fn carve_js(
     srcs: &[u8],
     n: usize,

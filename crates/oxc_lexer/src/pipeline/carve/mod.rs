@@ -7,7 +7,7 @@ mod jsx;
 use js::carve_js;
 use jsx::carve_jsx;
 
-#[inline(never)]
+#[inline(always)]
 pub unsafe fn carve(
     srcs: &[u8],
     n: usize,

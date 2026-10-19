@@ -36,7 +36,11 @@ use carve::carve;
 use classify::classify;
 use coalesce::{KWB, coalesce};
 use compress::{STAGE_CAP, compress, write_sentinels};
-use cpu::{Cpu, DynCpu, cpu_select};
+#[cfg(target_arch = "x86_64")]
+use cpu::Avx2;
+#[cfg(target_arch = "aarch64")]
+use cpu::Neon;
+use cpu::{Cpu, DynCpu, Generic, cpu_select};
 use misc::{misc_post, misc_pre};
 
 pub struct Lexer {
@@ -146,18 +150,72 @@ impl Lexer {
     ) -> usize {
         cpu_select!(self.cpu, {
             Avx2(cpu) => {
-                self.lex_raw_impl(src, n, out_kinds, out_spans, jsx, ts, module, vutf8, cpu)
+                self.lex_raw_avx2(src, n, out_kinds, out_spans, jsx, ts, module, vutf8, cpu)
             },
             Neon(cpu) => {
-                self.lex_raw_impl(src, n, out_kinds, out_spans, jsx, ts, module, vutf8, cpu)
+                self.lex_raw_neon(src, n, out_kinds, out_spans, jsx, ts, module, vutf8, cpu)
             },
             Generic(cpu) => {
-                self.lex_raw_impl(src, n, out_kinds, out_spans, jsx, ts, module, vutf8, cpu)
+                self.lex_raw_generic(src, n, out_kinds, out_spans, jsx, ts, module, vutf8, cpu)
             },
         })
     }
 
-    // One copy per feature set, so classify and compress resolve at compile time inside each.
+    // The whole pipeline is compiled once per feature set: every stage inlines into these entry
+    // points, so the feature set's instructions are available throughout, not just in the kernels.
+    #[cfg(target_arch = "x86_64")]
+    #[inline(never)]
+    #[target_feature(enable = "avx2,bmi2,popcnt")]
+    unsafe fn lex_raw_avx2(
+        &mut self,
+        src: &[u8],
+        n: usize,
+        out_kinds: *mut u8,
+        out_spans: *mut Span,
+        jsx: bool,
+        ts: bool,
+        module: bool,
+        vutf8: bool,
+        cpu: Avx2,
+    ) -> usize {
+        self.lex_raw_impl(src, n, out_kinds, out_spans, jsx, ts, module, vutf8, cpu)
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    #[inline(never)]
+    #[target_feature(enable = "neon")]
+    unsafe fn lex_raw_neon(
+        &mut self,
+        src: &[u8],
+        n: usize,
+        out_kinds: *mut u8,
+        out_spans: *mut Span,
+        jsx: bool,
+        ts: bool,
+        module: bool,
+        vutf8: bool,
+        cpu: Neon,
+    ) -> usize {
+        self.lex_raw_impl(src, n, out_kinds, out_spans, jsx, ts, module, vutf8, cpu)
+    }
+
+    #[inline(never)]
+    unsafe fn lex_raw_generic(
+        &mut self,
+        src: &[u8],
+        n: usize,
+        out_kinds: *mut u8,
+        out_spans: *mut Span,
+        jsx: bool,
+        ts: bool,
+        module: bool,
+        vutf8: bool,
+        cpu: Generic,
+    ) -> usize {
+        self.lex_raw_impl(src, n, out_kinds, out_spans, jsx, ts, module, vutf8, cpu)
+    }
+
+    #[inline(always)]
     unsafe fn lex_raw_impl(
         &mut self,
         src: &[u8],

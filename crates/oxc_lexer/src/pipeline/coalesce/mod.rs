@@ -22,7 +22,7 @@ use keywords::{kw_flush, kw_match_word};
 /// [`glue_number`] computes the kind as `NUM + is_bigint` - keep them adjacent.
 const _: () = assert!(tk!(BigInt) == tk!(Number) + 1);
 
-#[inline(never)]
+#[inline(always)]
 pub unsafe fn coalesce(
     src: *const u8,
     n: usize,

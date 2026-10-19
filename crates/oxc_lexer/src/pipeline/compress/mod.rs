@@ -20,7 +20,7 @@ mod common;
 const STAGE_BLOCKS: usize = 32;
 pub const STAGE_CAP: usize = STAGE_BLOCKS * 64 + 128;
 
-#[inline(never)]
+#[inline(always)]
 pub unsafe fn compress(
     src: &[u8],
     n: usize,

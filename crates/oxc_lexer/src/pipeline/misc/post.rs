@@ -2,7 +2,7 @@ use crate::token::{KW_KIND_BASE, tk};
 
 use crate::pipeline::bitmap::{bm_clear, bm_get, bm_prev1};
 
-#[inline]
+#[inline(always)]
 pub unsafe fn misc_post(
     src: *const u8,
     n: usize,
