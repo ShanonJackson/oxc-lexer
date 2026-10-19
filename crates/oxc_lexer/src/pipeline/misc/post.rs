@@ -1,11 +1,7 @@
 use crate::token::{KW_KIND_BASE, tk};
 
-use crate::pipeline::{
-    bitmap::{bm_clear, bm_get, bm_prev1},
-    cpu::{Cpu, apply, cpu_versions},
-};
+use crate::pipeline::bitmap::{bm_clear, bm_get, bm_prev1};
 
-#[apply(cpu_versions)]
 #[inline]
 pub unsafe fn misc_post(
     src: *const u8,
@@ -15,14 +11,12 @@ pub unsafe fn misc_post(
     misc: *const u64,
     kind: *mut u8,
     nesc: usize,
-    cpu: impl Cpu,
 ) {
     if nesc != 0 {
-        misc_post_impl(src, n, st, word, misc, kind, cpu)
+        misc_post_impl(src, n, st, word, misc, kind)
     }
 }
 
-#[apply(cpu_versions)]
 #[inline(never)]
 unsafe fn misc_post_impl(
     src: *const u8,
@@ -31,7 +25,6 @@ unsafe fn misc_post_impl(
     word: *const u64,
     misc: *const u64,
     kind: *mut u8,
-    _cpu: impl Cpu,
 ) {
     let nw = (n + 63) >> 6;
     for w in 0..nw {

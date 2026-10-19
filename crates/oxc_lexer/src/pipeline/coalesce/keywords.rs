@@ -8,10 +8,7 @@ use std::ptr;
 
 use crate::token::TokenKind;
 
-use crate::pipeline::{
-    cpu::{Cpu, apply, cpu_versions},
-    keywords::kw_match,
-};
+use crate::pipeline::keywords::kw_match;
 
 pub const KWB: usize = 64;
 
@@ -25,12 +22,11 @@ pub(super) unsafe fn kw_flush(
     kind: *mut u8,
     kwpos: *const u32,
     k: usize,
-    cpu: impl Cpu,
 ) {
     if ts {
-        kw_verify_batch::<true>(src, word, kind, kwpos, k, cpu);
+        kw_verify_batch::<true>(src, word, kind, kwpos, k);
     } else {
-        kw_verify_batch::<false>(src, word, kind, kwpos, k, cpu);
+        kw_verify_batch::<false>(src, word, kind, kwpos, k);
     }
 }
 
@@ -41,7 +37,6 @@ pub(super) unsafe fn kw_flush(
 /// for TS - monomorphized so the JS copy carries none of the wider key.
 /// Kept out of line: inlining would double both variants into each of
 /// coalesce's flush sites, and one call per KWB words is free.
-#[apply(cpu_versions)]
 #[inline(never)]
 unsafe fn kw_verify_batch<const IS_TS: bool>(
     src: *const u8,
@@ -49,7 +44,6 @@ unsafe fn kw_verify_batch<const IS_TS: bool>(
     kind: *mut u8,
     pos: *const u32,
     k: usize,
-    _cpu: impl Cpu,
 ) {
     for ix in 0..k {
         let p = *pos.add(ix) as usize;
@@ -73,14 +67,12 @@ unsafe fn kw_verify_batch<const IS_TS: bool>(
 /// * `word` must be the word bitmap for `src`, and valid for reading 8 bytes from byte `pos / 8`.
 /// * The byte at `pos` must be a word char.
 /// * `src` must be valid for reading 16 bytes from `pos`.
-#[apply(cpu_versions)]
 #[inline]
 pub(super) unsafe fn kw_match_word(
     ts: bool,
     src: *const u8,
     word: *const u64,
     pos: usize,
-    _cpu: impl Cpu,
 ) -> TokenKind {
     let len = word_len(word, pos);
     if ts { kw_match::<true>(src.add(pos), len) } else { kw_match::<false>(src.add(pos), len) }
@@ -105,7 +97,7 @@ unsafe fn word_len(word: *const u64, pos: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use crate::{pipeline::cpu::DynCpu, token::tk};
+    use crate::token::tk;
 
     use super::*;
 
@@ -113,8 +105,6 @@ mod tests {
     /// including for words longer than 16 bytes, and words crossing a 64-byte boundary.
     #[test]
     fn test_kw_flush() {
-        let cpu = DynCpu::detect();
-
         let words: [(usize, &str, TokenKind, bool); 6] = [
             (3, "class", TokenKind::KwClass, false),
             (20, "interface", TokenKind::KwInterface, true),
@@ -149,7 +139,6 @@ mod tests {
                     kinds.as_mut_ptr(),
                     positions.as_ptr(),
                     positions.len(),
-                    cpu,
                 );
             }
 

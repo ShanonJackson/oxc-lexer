@@ -9,7 +9,6 @@ use crate::{
 use crate::pipeline::{
     bitmap::{bm_clear, bm_clear_range, bm_get, bm_next0, bm_set},
     bytes::{is_digit, is_word, is_ws},
-    cpu::{Cpu, apply, cpu_select, cpu_versions},
     disambiguate::{gt_run_split, lt_run_split},
     operators::{is_op_char, opmap_longest, opmap_pack2, opmap_pack3},
     scan::scan_number,
@@ -23,7 +22,6 @@ use keywords::{kw_flush, kw_match_word};
 /// [`glue_number`] computes the kind as `NUM + is_bigint` - keep them adjacent.
 const _: () = assert!(tk!(BigInt) == tk!(Number) + 1);
 
-#[apply(cpu_versions)]
 #[inline(never)]
 pub unsafe fn coalesce(
     src: *const u8,
@@ -38,7 +36,6 @@ pub unsafe fn coalesce(
     kwpos: *mut u32,
     ts: bool,
     lanes: &mut Lanes,
-    cpu: impl Cpu,
 ) {
     lanes.disambiguate.restart(lanes.module);
     let nw = (n + 63) >> 6;
@@ -76,8 +73,8 @@ pub unsafe fn coalesce(
         if kwc != 0 {
             let base = (w << 6) as u32;
             let cnt = kwc.count_ones() as usize;
-            prefetch(src.add(base as usize), cpu);
-            prefetch(kind.add(base as usize) as *const u8, cpu);
+            prefetch(src.add(base as usize));
+            prefetch(kind.add(base as usize) as *const u8);
             *kwpos.add(k) = base + kwc.trailing_zeros();
             kwc &= kwc.wrapping_sub(1);
             *kwpos.add(k + 1) = base + kwc.trailing_zeros();
@@ -129,7 +126,7 @@ pub unsafe fn coalesce(
                         continue;
                     }
                 }
-                cursor = glue_number(ts, src, n, st, opch, word, kind, p, lanes, cpu);
+                cursor = glue_number(ts, src, n, st, opch, word, kind, p, lanes);
             } else {
                 let y2 = (op >> bit) | ((opnext << (63 - bit)) << 1);
                 let run = (!y2).trailing_zeros() as usize;
@@ -158,7 +155,7 @@ pub unsafe fn coalesce(
                     let g = gt_run_split(&tokens, &mut lanes.disambiguate.walks, p, run);
                     if g != 0 {
                         // Only `>`s stay split; the rest still munches, or `>>&&` would emit two `&`s.
-                        cursor = munch_walk(src, n, st, opch, kind, p + g, cpu);
+                        cursor = munch_walk(src, n, st, opch, kind, p + g);
                         continue;
                     }
                 }
@@ -177,7 +174,7 @@ pub unsafe fn coalesce(
                         &lanes.disambiguate.closers,
                     );
                     if lt_run_split(&tokens, p) {
-                        cursor = munch_walk(src, n, st, opch, kind, p + 2, cpu);
+                        cursor = munch_walk(src, n, st, opch, kind, p + 2);
                         continue;
                     }
                 }
@@ -195,7 +192,7 @@ pub unsafe fn coalesce(
                     continue;
                 }
                 if run > 3 {
-                    cursor = munch_walk(src, n, st, opch, kind, p, cpu);
+                    cursor = munch_walk(src, n, st, opch, kind, p);
                     continue;
                 }
                 let b2 = (q >> 16) as u8;
@@ -229,14 +226,13 @@ pub unsafe fn coalesce(
             }
         }
         if w & (KWB - 1) == KWB - 1 {
-            kw_flush(ts, src, word, kind, kwpos, k, cpu);
+            kw_flush(ts, src, word, kind, kwpos, k);
             k = 0;
         }
     }
-    kw_flush(ts, src, word, kind, kwpos, k, cpu);
+    kw_flush(ts, src, word, kind, kwpos, k);
 }
 
-#[apply(cpu_versions)]
 unsafe fn glue_number(
     ts: bool,
     src: *const u8,
@@ -247,7 +243,6 @@ unsafe fn glue_number(
     kind: *mut u8,
     mut p: usize,
     lanes: &mut Lanes,
-    cpu: impl Cpu,
 ) -> usize {
     loop {
         let e2 = scan_number(src, n, p);
@@ -287,7 +282,7 @@ unsafe fn glue_number(
                 // word bitmap, no match right after a member `.` (a number
                 // ending in `.` is that dot-run's first dot).
                 if *src.add(e2 - 1) != b'.' {
-                    let kk = kw_match_word(ts, src, word, e2, cpu);
+                    let kk = kw_match_word(ts, src, word, e2);
                     if kk != TokenKind::Ident {
                         *kind.add(e2) = kk as u8;
                     }
@@ -321,10 +316,10 @@ unsafe fn glue_number(
                 if g != 0 {
                     // The split `>`s stay single tokens, but whatever borders on them is still an operator run and has to be
                     // munched, or a following `&&` / `??` / `**` is emitted a byte at a time.
-                    return munch_walk(src, n, st, opch, kind, e2 + g, cpu);
+                    return munch_walk(src, n, st, opch, kind, e2 + g);
                 }
             }
-            let q = munch_walk(src, n, st, opch, kind, e2, cpu);
+            let q = munch_walk(src, n, st, opch, kind, e2);
             if q < n && *src.add(q) == b'.' && is_digit(*src.add(q + 1)) && bm_get(st, q) {
                 p = q;
                 continue;
@@ -336,7 +331,6 @@ unsafe fn glue_number(
 }
 
 /// Cold path. Kept out of line so it does not slow the coalesce loop.
-#[apply(cpu_versions)]
 #[inline(never)]
 unsafe fn munch_walk(
     src: *const u8,
@@ -345,7 +339,6 @@ unsafe fn munch_walk(
     opch: *const u64,
     kind: *mut u8,
     mut pos: usize,
-    _cpu: impl Cpu,
 ) -> usize {
     let end = bm_next0(opch, pos, n);
     while end - pos >= 2 {
@@ -372,16 +365,13 @@ unsafe fn munch_walk(
 }
 
 #[inline(always)]
-fn prefetch(p: *const u8, cpu: impl Cpu) {
+fn prefetch(p: *const u8) {
     let _ = p; // Avoid clippy unused vars warning
 
-    cpu_select!(cpu, {
-        Avx2(_) => {
-            use std::arch::x86_64;
-            // SAFETY: `Avx2` type guarantees CPU supports AVX2
-            unsafe { x86_64::_mm_prefetch(p as *const i8, x86_64::_MM_HINT_T0) }
-        }
-        Neon(_) => { /* no-op */ }
-        Generic(_) => { /* no-op */ }
-    });
+    #[cfg(target_arch = "x86_64")]
+    {
+        use std::arch::x86_64;
+        // SAFETY: Prefetch is baseline SSE and never faults, whatever p points at.
+        unsafe { x86_64::_mm_prefetch(p as *const i8, x86_64::_MM_HINT_T0) }
+    }
 }
