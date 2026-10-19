@@ -2,7 +2,8 @@ use crate::{lanes::Lanes, token::tk};
 
 use crate::pipeline::{
     bitmap::{bm_clear_range, bm_set},
-    find::{OPENER, OPENER6, find, find_line_terminator},
+    find::{OPENER, OPENER6, find_line_terminator},
+    simd::Simd,
 };
 
 use super::common::{
@@ -11,7 +12,7 @@ use super::common::{
 };
 
 #[inline(always)]
-pub(super) unsafe fn carve_js(
+pub(super) unsafe fn carve_js<C: Simd>(
     srcs: &[u8],
     n: usize,
     st: *mut u64,
@@ -35,17 +36,17 @@ pub(super) unsafe fn carve_js(
     }
     loop {
         let nsub = depth.len();
-        let s = if nsub != 0 { find(src, n, i, OPENER6) } else { find(src, n, i, OPENER) };
+        let s = if nsub != 0 { C::find(src, n, i, OPENER6) } else { C::find(src, n, i, OPENER) };
         if s >= n {
             break;
         }
         let c = *src.add(s);
         match c {
             b'"' | b'\'' => {
-                i = lex_string(src, srcs, n, st, kind, s, c, lanes);
+                i = lex_string::<C>(src, srcs, n, st, kind, s, c, lanes);
             }
             b'`' => {
-                let (end, opened_sub) = lex_template_segment(
+                let (end, opened_sub) = lex_template_segment::<C>(
                     src,
                     srcs,
                     n,
@@ -77,7 +78,7 @@ pub(super) unsafe fn carve_js(
                     i = s + 1;
                 } else {
                     depth.pop();
-                    let (end, opened_sub) = lex_template_segment(
+                    let (end, opened_sub) = lex_template_segment::<C>(
                         src,
                         srcs,
                         n,
@@ -95,7 +96,7 @@ pub(super) unsafe fn carve_js(
                 }
             }
             b'/' => {
-                i = lex_slash(src, srcs, n, st, kind, opch, word, ts, s, lanes);
+                i = lex_slash::<C>(src, srcs, n, st, kind, opch, word, ts, s, lanes);
             }
             b'<' => {
                 // Annex B B.1.1: `<!--` begins a line comment.

@@ -1,4 +1,4 @@
-use crate::lanes::Lanes;
+use crate::{lanes::Lanes, pipeline::simd::Simd};
 
 mod common;
 mod js;
@@ -8,7 +8,7 @@ use js::carve_js;
 use jsx::carve_jsx;
 
 #[inline(always)]
-pub unsafe fn carve(
+pub unsafe fn carve<C: Simd>(
     srcs: &[u8],
     n: usize,
     st: *mut u64,
@@ -21,10 +21,11 @@ pub unsafe fn carve(
     jsx: bool,
     ts: bool,
     lanes: &mut Lanes,
+    _cpu: C,
 ) {
     if jsx {
-        carve_jsx(srcs, n, st, kind, opch, word, digit, dot, kwinit, ts, lanes);
+        carve_jsx::<C>(srcs, n, st, kind, opch, word, digit, dot, kwinit, ts, lanes);
     } else {
-        carve_js(srcs, n, st, kind, opch, word, ts, lanes);
+        carve_js::<C>(srcs, n, st, kind, opch, word, ts, lanes);
     }
 }

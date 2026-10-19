@@ -7,14 +7,15 @@ use crate::pipeline::{
     bytes::hex_val,
     disambiguate::not_operator_position,
     find::find_line_terminator,
-    scan::{scan_block_comment, scan_line_comment, scan_quoted, scan_regex, scan_tmpl_text},
+    scan::{scan_quoted, scan_regex, scan_tmpl_text},
+    simd::Simd,
     token_view,
 };
 
 /// Lex the string literal opening at `s`. Returns the resume index. Shared
 /// by `carve` and `carve_jsx` JS mode.
 #[inline(always)]
-pub(super) unsafe fn lex_string(
+pub(super) unsafe fn lex_string<C: Simd>(
     src: *const u8,
     srcs: &[u8],
     n: usize,
@@ -25,7 +26,7 @@ pub(super) unsafe fn lex_string(
     lanes: &mut Lanes,
 ) -> usize {
     let mut saw_nl = false;
-    let e = scan_quoted(src, n, s + 1, c, &mut saw_nl);
+    let e = scan_quoted::<C>(src, n, s + 1, c, &mut saw_nl);
     let end = if e < n { e + 1 } else { n };
     if saw_nl {
         // The terminator wins over unterminated-at-EOF, same as oxc_parser.
@@ -53,7 +54,7 @@ pub(super) unsafe fn lex_string(
 /// it closes or runs to EOF. Returns `(resume index, substitution opened)`;
 /// the caller pushes its own nesting frame.
 #[inline(always)]
-pub(super) unsafe fn lex_template_segment(
+pub(super) unsafe fn lex_template_segment<C: Simd>(
     src: *const u8,
     srcs: &[u8],
     n: usize,
@@ -65,7 +66,7 @@ pub(super) unsafe fn lex_template_segment(
     lanes: &mut Lanes,
 ) -> (usize, bool) {
     let mut term = 0i32;
-    let end = scan_tmpl_text(src, n, s + 1, &mut term);
+    let end = scan_tmpl_text::<C>(src, n, s + 1, &mut term);
     if term == 0 {
         lanes.push_diag(s as u32, (end - s) as u32, DiagCode::UnterminatedTemplate);
     }
@@ -80,7 +81,7 @@ pub(super) unsafe fn lex_template_segment(
 /// The `/` dispatch shared by `carve` and `carve_jsx` JS mode: line comment,
 /// block comment, regex, `/=`, or a bare slash left for `coalesce`.
 #[inline(always)]
-pub(super) unsafe fn lex_slash(
+pub(super) unsafe fn lex_slash<C: Simd>(
     src: *const u8,
     srcs: &[u8],
     n: usize,
@@ -94,9 +95,9 @@ pub(super) unsafe fn lex_slash(
 ) -> usize {
     let d = if s + 1 < n { *src.add(s + 1) } else { 0 };
     if d == b'/' {
-        lex_line_comment(src, srcs, n, st, kind, s, lanes)
+        lex_line_comment::<C>(src, srcs, n, st, kind, s, lanes)
     } else if d == b'*' {
-        lex_block_comment(src, srcs, n, st, kind, s, lanes)
+        lex_block_comment::<C>(src, srcs, n, st, kind, s, lanes)
     } else if not_operator_position(
         &token_view(
             src,
@@ -113,7 +114,7 @@ pub(super) unsafe fn lex_slash(
         &mut lanes.disambiguate.walks,
         s,
     ) {
-        lex_regex(src, srcs, n, st, kind, word, s, lanes)
+        lex_regex::<C>(src, srcs, n, st, kind, word, s, lanes)
     } else if s + 1 < n && *src.add(s + 1) == b'=' {
         // `/=`: absorb the `=`.
         *kind.add(s) = tk!(SlashEq);
@@ -127,7 +128,7 @@ pub(super) unsafe fn lex_slash(
 
 /// Lex the `//` line comment at `s`. Returns the resume index.
 #[inline(always)]
-pub(super) unsafe fn lex_line_comment(
+pub(super) unsafe fn lex_line_comment<C: Simd>(
     src: *const u8,
     srcs: &[u8],
     n: usize,
@@ -136,7 +137,7 @@ pub(super) unsafe fn lex_line_comment(
     s: usize,
     lanes: &mut Lanes,
 ) -> usize {
-    let (end, lic_q) = scan_line_comment(src, n, s + 2);
+    let (end, lic_q) = C::scan_line_comment(src, n, s + 2);
     *kind.add(s) = tk!(LineComment);
     if end > s + 1 {
         bm_clear_range(st, s + 1, end - 1);
@@ -159,7 +160,7 @@ pub(super) unsafe fn lex_line_comment(
 /// Lex the `/*` block comment at `s` (unterminated at EOF is diagnosed).
 /// Returns the resume index.
 #[inline(always)]
-pub(super) unsafe fn lex_block_comment(
+pub(super) unsafe fn lex_block_comment<C: Simd>(
     src: *const u8,
     srcs: &[u8],
     n: usize,
@@ -168,7 +169,7 @@ pub(super) unsafe fn lex_block_comment(
     s: usize,
     lanes: &mut Lanes,
 ) -> usize {
-    let (e, saw_nl, lic_q) = scan_block_comment(src, n, s + 2);
+    let (e, saw_nl, lic_q) = C::scan_block_comment(src, n, s + 2);
     let end = if e < n { e + 1 } else { n };
     if e >= n {
         lanes.push_diag(s as u32, (n - s) as u32, DiagCode::UnterminatedBlockComment);
@@ -196,7 +197,7 @@ pub(super) unsafe fn lex_block_comment(
 /// Lex the regex literal at `s` (the regex-vs-division decision is already
 /// made): body, flag run, diagnostics. Returns the resume index.
 #[inline(always)]
-unsafe fn lex_regex(
+unsafe fn lex_regex<C: Simd>(
     src: *const u8,
     srcs: &[u8],
     n: usize,
@@ -207,7 +208,7 @@ unsafe fn lex_regex(
     lanes: &mut Lanes,
 ) -> usize {
     let mut nl_at = usize::MAX;
-    let e = scan_regex(src, n, s + 1, &mut nl_at);
+    let e = scan_regex::<C>(src, n, s + 1, &mut nl_at);
     let fs = if e < n { e + 1 } else { n };
     if nl_at != usize::MAX {
         // oxc_parser reports a line terminator in the body as "unterminated"

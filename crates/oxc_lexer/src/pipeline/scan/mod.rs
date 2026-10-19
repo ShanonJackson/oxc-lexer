@@ -1,3 +1,6 @@
+#[cfg(target_arch = "x86_64")]
+pub(super) mod avx2;
+
 #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]
 mod sse2;
 #[cfg(all(target_arch = "x86_64", target_feature = "sse2"))]

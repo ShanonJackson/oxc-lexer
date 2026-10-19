@@ -29,6 +29,7 @@ mod keywords;
 mod misc;
 mod operators;
 mod scan;
+mod simd;
 
 pub(crate) use disambiguate::State as DisambiguateState;
 
@@ -40,8 +41,9 @@ use compress::{STAGE_CAP, compress, write_sentinels};
 use cpu::Avx2;
 #[cfg(target_arch = "aarch64")]
 use cpu::Neon;
-use cpu::{Cpu, DynCpu, Generic, cpu_select};
+use cpu::{DynCpu, Generic, cpu_select};
 use misc::{misc_post, misc_pre};
+use simd::Simd;
 
 pub struct Lexer {
     word: Vec<u64>,
@@ -216,7 +218,7 @@ impl Lexer {
     }
 
     #[inline(always)]
-    unsafe fn lex_raw_impl(
+    unsafe fn lex_raw_impl<C: Simd>(
         &mut self,
         src: &[u8],
         n: usize,
@@ -226,7 +228,7 @@ impl Lexer {
         ts: bool,
         module: bool,
         vutf8: bool,
-        cpu: impl Cpu,
+        cpu: C,
     ) -> usize {
         debug_assert!(src.len() >= n + PAD, "source must extend PAD zeroed bytes past n");
         self.ensure(n);
@@ -256,7 +258,7 @@ impl Lexer {
         // byte-identical to a build without it.
         classify(ts, sp, n, nb, word, st, kwinit, opch, digit, dot, misc, kind, cpu);
         let nesc = misc_pre(sp, n, nb, st, word, misc, kind, vutf8, &mut self.lanes);
-        carve(src, n, st, kind, opch, word, digit, dot, kwinit, jsx, ts, &mut self.lanes);
+        carve(src, n, st, kind, opch, word, digit, dot, kwinit, jsx, ts, &mut self.lanes, cpu);
         coalesce(sp, n, st, opch, word, digit, dot, kwinit, kind, kwpos, ts, &mut self.lanes);
         misc_post(sp, n, st, word, misc, kind, nesc);
         let sig_len = compress(

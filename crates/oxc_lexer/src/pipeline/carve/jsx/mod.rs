@@ -4,9 +4,8 @@ use crate::pipeline::{
     bitmap::{bm_clear, bm_clear_range, bm_set},
     bytes::{is_digit, is_id_start, is_word},
     disambiguate::{not_operator_position, prev_sig},
-    find::{
-        JSX_TAG, JSX_TEXT, OPENER, OPENER_JSX5, OPENER_JSX7, OPENER6, find, find_line_terminator,
-    },
+    find::{JSX_TAG, JSX_TEXT, OPENER, OPENER_JSX5, OPENER_JSX7, OPENER6, find_line_terminator},
+    simd::Simd,
     token_view,
 };
 
@@ -62,7 +61,7 @@ enum JFrameKind {
 /// so those bits are cleared there to keep `coalesce` and `keywords` from
 /// re-interpreting it.
 #[inline(always)]
-pub(super) unsafe fn carve_jsx(
+pub(super) unsafe fn carve_jsx<C: Simd>(
     srcs: &[u8],
     n: usize,
     st: *mut u64,
@@ -103,10 +102,10 @@ pub(super) unsafe fn carve_jsx(
                 // The finders that also stop at `>` are only switched on by a `<!--` in a
                 // script (see `html_close`).
                 let s = match (in_brace, html_close) {
-                    (true, false) => find(src, n, i, OPENER_JSX7),
-                    (true, true) => find(src, n, i, OPENER6),
-                    (false, false) => find(src, n, i, OPENER_JSX5),
-                    (false, true) => find(src, n, i, OPENER),
+                    (true, false) => C::find(src, n, i, OPENER_JSX7),
+                    (true, true) => C::find(src, n, i, OPENER6),
+                    (false, false) => C::find(src, n, i, OPENER_JSX5),
+                    (false, true) => C::find(src, n, i, OPENER),
                 };
                 if s >= n {
                     break;
@@ -114,10 +113,10 @@ pub(super) unsafe fn carve_jsx(
                 let c = *src.add(s);
                 match c {
                     b'"' | b'\'' => {
-                        i = lex_string(src, srcs, n, st, kind, s, c, lanes);
+                        i = lex_string::<C>(src, srcs, n, st, kind, s, c, lanes);
                     }
                     b'`' => {
-                        let (end, opened_sub) = lex_template_segment(
+                        let (end, opened_sub) = lex_template_segment::<C>(
                             src,
                             srcs,
                             n,
@@ -159,7 +158,7 @@ pub(super) unsafe fn carve_jsx(
                             i = s + 1;
                         } else if top_kind == Some(JFrameKind::TemplateSub) {
                             stack.pop();
-                            let (end, opened_sub) = lex_template_segment(
+                            let (end, opened_sub) = lex_template_segment::<C>(
                                 src,
                                 srcs,
                                 n,
@@ -193,7 +192,7 @@ pub(super) unsafe fn carve_jsx(
                         }
                     }
                     b'/' => {
-                        i = lex_slash(src, srcs, n, st, kind, opch, word, ts, s, lanes);
+                        i = lex_slash::<C>(src, srcs, n, st, kind, opch, word, ts, s, lanes);
                     }
                     b'<' => {
                         let c1 = if s + 1 < n { *src.add(s + 1) } else { 0 };
@@ -278,7 +277,7 @@ pub(super) unsafe fn carve_jsx(
                 }
             }
             JMode::Tag => {
-                let s = find(src, n, i, JSX_TAG);
+                let s = C::find(src, n, i, JSX_TAG);
                 if s >= n {
                     break;
                 }
@@ -334,9 +333,9 @@ pub(super) unsafe fn carve_jsx(
                     let mut sub: Vec<u32> = Vec::new();
                     while p < n && depth != 0 {
                         let q = if !sub.is_empty() {
-                            find(src, n, p, OPENER6)
+                            C::find(src, n, p, OPENER6)
                         } else {
-                            find(src, n, p, OPENER)
+                            C::find(src, n, p, OPENER)
                         };
                         if q >= n {
                             p = n;
@@ -356,10 +355,10 @@ pub(super) unsafe fn carve_jsx(
                                 p = q + 1;
                             }
                             b'"' | b'\'' => {
-                                p = lex_string(src, srcs, n, st, kind, q, *src.add(q), lanes);
+                                p = lex_string::<C>(src, srcs, n, st, kind, q, *src.add(q), lanes);
                             }
                             b'`' => {
-                                let (end, opened) = lex_template_segment(
+                                let (end, opened) = lex_template_segment::<C>(
                                     src,
                                     srcs,
                                     n,
@@ -394,7 +393,7 @@ pub(super) unsafe fn carve_jsx(
                                     continue;
                                 }
                                 sub.pop();
-                                let (end, opened) = lex_template_segment(
+                                let (end, opened) = lex_template_segment::<C>(
                                     src,
                                     srcs,
                                     n,
@@ -415,8 +414,10 @@ pub(super) unsafe fn carve_jsx(
                             // is left alone.
                             b'/' => {
                                 p = match *src.add(q + 1) {
-                                    b'*' => lex_block_comment(src, srcs, n, st, kind, q, lanes),
-                                    b'/' => lex_line_comment(src, srcs, n, st, kind, q, lanes),
+                                    b'*' => {
+                                        lex_block_comment::<C>(src, srcs, n, st, kind, q, lanes)
+                                    }
+                                    b'/' => lex_line_comment::<C>(src, srcs, n, st, kind, q, lanes),
                                     _ => q + 1,
                                 };
                             }
@@ -433,7 +434,7 @@ pub(super) unsafe fn carve_jsx(
                 match c {
                     b'"' | b'\'' => {
                         // JSX attribute string: no escapes, ends at next quote.
-                        let e = find(src, n, s + 1, [c]);
+                        let e = C::find(src, n, s + 1, [c]);
                         if e >= n {
                             lanes.push_diag(s as u32, (n - s) as u32, DiagCode::UnterminatedString);
                         }
@@ -467,9 +468,9 @@ pub(super) unsafe fn carve_jsx(
                         let d = if s + 1 < n { *src.add(s + 1) } else { 0 };
                         if d == b'*' {
                             // comment inside a tag = whitespace
-                            i = lex_block_comment(src, srcs, n, st, kind, s, lanes);
+                            i = lex_block_comment::<C>(src, srcs, n, st, kind, s, lanes);
                         } else if d == b'/' {
-                            i = lex_line_comment(src, srcs, n, st, kind, s, lanes);
+                            i = lex_line_comment::<C>(src, srcs, n, st, kind, s, lanes);
                         } else {
                             // `/>` closes the tag, with any trivia (comments, Unicode
                             // whitespace) between the two.
@@ -486,10 +487,10 @@ pub(super) unsafe fn carve_jsx(
                                 while q < gp {
                                     q = match (*src.add(q), *src.add(q + 1)) {
                                         (b'/', b'*') => {
-                                            lex_block_comment(src, srcs, n, st, kind, q, lanes)
+                                            lex_block_comment::<C>(src, srcs, n, st, kind, q, lanes)
                                         }
                                         (b'/', b'/') => {
-                                            lex_line_comment(src, srcs, n, st, kind, q, lanes)
+                                            lex_line_comment::<C>(src, srcs, n, st, kind, q, lanes)
                                         }
                                         _ => q + 1,
                                     };
@@ -525,7 +526,7 @@ pub(super) unsafe fn carve_jsx(
                 }
             }
             JMode::Text => {
-                let s = find(src, n, i, JSX_TEXT);
+                let s = C::find(src, n, i, JSX_TEXT);
                 let runend = if s < n { s } else { n };
                 if runend > text_start {
                     // One JTEXT token for the run; neutralize its start byte
@@ -578,20 +579,24 @@ pub(super) unsafe fn carve_jsx(
                         let mut q = s + 1;
                         while q < tpos {
                             q = match (*src.add(q), *src.add(q + 1)) {
-                                (b'/', b'*') => lex_block_comment(src, srcs, n, st, kind, q, lanes),
-                                (b'/', b'/') => lex_line_comment(src, srcs, n, st, kind, q, lanes),
+                                (b'/', b'*') => {
+                                    lex_block_comment::<C>(src, srcs, n, st, kind, q, lanes)
+                                }
+                                (b'/', b'/') => {
+                                    lex_line_comment::<C>(src, srcs, n, st, kind, q, lanes)
+                                }
                                 _ => q + 1,
                             };
                         }
                         let mut gp = tpos + 1;
                         loop {
-                            gp = find(src, n, gp, [b'>', b'/']);
+                            gp = C::find(src, n, gp, [b'>', b'/']);
                             if gp >= n || *src.add(gp) == b'>' {
                                 break;
                             }
                             gp = match *src.add(gp + 1) {
-                                b'*' => lex_block_comment(src, srcs, n, st, kind, gp, lanes),
-                                b'/' => lex_line_comment(src, srcs, n, st, kind, gp, lanes),
+                                b'*' => lex_block_comment::<C>(src, srcs, n, st, kind, gp, lanes),
+                                b'/' => lex_line_comment::<C>(src, srcs, n, st, kind, gp, lanes),
                                 _ => gp + 1,
                             };
                         }
